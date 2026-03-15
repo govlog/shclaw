@@ -1,14 +1,43 @@
+<div align="center">
+
 # shclaw
+
+**Self-contained multi-agent AI orchestrator in C.**
+**Single static binary. No dependencies. No runtime.**
+
+<br>
+
+![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+![musl](https://img.shields.io/badge/musl-518K-blue?style=flat-square)
+![cosmo](https://img.shields.io/badge/cosmo-956K-blue?style=flat-square)
+![Lines](https://img.shields.io/badge/~6000_lines-grey?style=flat-square)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
+![FreeBSD](https://img.shields.io/badge/FreeBSD-AB2B28?style=flat-square&logo=freebsd&logoColor=white)
+![NetBSD](https://img.shields.io/badge/NetBSD-FF6600?style=flat-square&logo=netbsd&logoColor=white)
+![OpenBSD](https://img.shields.io/badge/OpenBSD-F2CA30?style=flat-square&logo=openbsd&logoColor=black)
+
+<br>
+
+*IRC · Multi-LLM · Runtime C plugins · Scheduling · Inter-agent messaging*
+
+<br>
+
+<img src="screen.png" alt="shclaw TUI" width="700">
+
+</div>
+
+<br>
 
 *[Lire en francais](README-fr.md)*
 
 ## What is this
 
-I got tired of bloatware. Every "AI agent framework" I looked at pulled in half the npm registry or needed a Python virtualenv the size of a small country. I wanted something that would just *run*. No runtime, no interpreter, no package manager, no containers required. Just a binary and a kernel.
+I got tired of bloatware. Every "AI agent framework" I looked at (with a few notable exceptions) pulled in half the npm registry or needed a Python virtualenv the size of a small country. I wanted something that would just *run*. No runtime, no interpreter, no package manager, no containers required. Just a binary and a kernel.
 
 So I wrote shclaw: a multi-agent AI orchestrator in C that compiles down to a single static binary under 1MB. It talks to LLMs (Claude, GPT, Ollama), lives on IRC, schedules its own tasks, remembers things across sessions, and — the part I find genuinely cool — it embeds a C compiler so agents can write and compile their own plugins at runtime. The whole thing runs natively on Linux, FreeBSD, NetBSD, and OpenBSD from the same ELF binary.
 
-This is a side project. A toy. Something I hack on because the problem space is interesting and because there's something satisfying about fitting TLS, HTTP, IRC, JSON parsing, an agentic loop, and a C compiler into 955 kilobytes.
+This is a side project. A toy. Something I hack on because the problem space is interesting and because there's something satisfying about fitting TLS, HTTP, IRC, JSON parsing, an agentic loop, and a C compiler into 956 kilobytes — or just 518K if you only need Linux.
 
 It's also largely vibe-coded. I had the building blocks, the architecture in my head, and enough C and systems knowledge to steer things — but the bulk of the code was written through a combination of Claude, Codex, and me yelling at both of them until the binary linked.
 
