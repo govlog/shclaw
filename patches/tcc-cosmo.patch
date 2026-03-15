@@ -1,0 +1,35 @@
+diff --git a/libtcc.c b/libtcc.c
+index 171e362..a409200 100644
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -583,7 +583,7 @@ static void tcc_split_path(TCCState *s, void *p_ary, int *p_nb_ary, const char *
+             if (c == '{' && p[1] && p[2] == '}') {
+                 c = p[1], p += 2;
+                 if (c == 'B')
+-                    cstr_cat(&str, s->tcc_lib_path, -1);
++                    cstr_cat(&str, s->tcc_lib_path ? s->tcc_lib_path : ".", -1);
+                 if (c == 'R')
+                     cstr_cat(&str, CONFIG_SYSROOT, -1);
+                 if (c == 'f' && file) {
+diff --git a/tccelf.c b/tccelf.c
+index b71c6f2..00ef73f 100644
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -1386,7 +1386,7 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
+         if (len > sizeof plt_name - 5)
+             len = sizeof plt_name - 5;
+         memcpy(plt_name, name, len);
+-        strcpy(plt_name + len, "@plt");
++        memcpy(plt_name + len, "@plt", 5);
+         attr->plt_sym = put_elf_sym(s1->symtab, attr->plt_offset, 0,
+             ELFW(ST_INFO)(STB_GLOBAL, STT_FUNC), 0, s1->plt->sh_num, plt_name);
+     } else {
+@@ -1895,6 +1895,8 @@ static void tcc_add_linker_symbols(TCCState *s1)
+             p0 = s->name;
+             if (*p0 == '.')
+                 ++p0;
++            if (*p0 == '\0')
++                goto next_sec;
+             p = p0;
+             for(;;) {
+                 int c = *p;

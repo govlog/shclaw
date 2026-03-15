@@ -1,0 +1,36 @@
+; shclaw global configuration
+
+[daemon]
+data_dir = ./data
+log_dir  = ./logs
+
+[irc]
+server   = irc.example.com
+port     = 6667
+nick     = mybot
+channel  = #mychannel
+owner    = yournick
+
+; --- LLM Providers ---
+
+[provider.anthropic]
+type     = anthropic
+api_key  = sk-ant-CHANGEME
+
+[provider.openai]
+type     = openai
+api_key  = sk-CHANGEME
+
+; Ollama (local, no API key needed)
+;[provider.ollama]
+;type     = openai
+;base_url = http://localhost:11434
+;api_key  =
+
+; --- Model tiers ---
+; Format: provider_name/model_id
+
+[tiers]
+simple   = anthropic/claude-haiku-4-5-20251001
+standard = anthropic/claude-sonnet-4-6
+complex  = anthropic/claude-opus-4-6

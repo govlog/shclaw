@@ -1,0 +1,11 @@
+build/
+build-cosmo/
+vendor/
+data/
+logs/
+etc/config.ini
+etc/agents/*.ini
+*.o
+*.so
+.git
+CLAUDE.md

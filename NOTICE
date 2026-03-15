@@ -1,0 +1,41 @@
+shclaw — Third-Party Licenses
+
+This software statically links the following libraries, which are fetched
+and compiled from source by vendor.sh and the Makefile. Users can rebuild
+with modified versions of any of these libraries.
+
+────────────────────────────────────────────────────────────────────────────
+
+BearSSL
+  Copyright (c) 2016 Thomas Pornin <pornin@bolet.org>
+  License: MIT
+  Source:  https://www.bearssl.org/
+
+cJSON
+  Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
+  License: MIT
+  Source:  https://github.com/DaveGamble/cJSON
+
+TinyCC (libtcc)
+  Copyright (c) 2001-2024 Fabrice Bellard and contributors
+  License: LGPL-2.1
+  Source:  https://repo.or.cz/tinycc.git
+
+  TinyCC is statically linked into the shclaw binary. In accordance with
+  LGPL-2.1 Section 6, the complete source code for TinyCC is available
+  via vendor.sh, and users can rebuild with a modified libtcc by running:
+
+    make clean && make musl    (or make cosmo)
+
+  The Makefile compiles libtcc.a from source. To use a modified version,
+  replace the TCC source tree in vendor/tcc/ before building.
+
+Cosmopolitan Libc (cosmo build only)
+  Copyright (c) 2020-2024 Justine Alexandra Roberts Tunney
+  License: ISC
+  Source:  https://github.com/jart/cosmopolitan
+
+musl libc (musl build only)
+  Copyright (c) 2005-2024 Rich Felker and contributors
+  License: MIT
+  Source:  https://musl.libc.org/

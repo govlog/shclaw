@@ -1,0 +1,43 @@
+# Binary
+shclaw
+shclaw.com
+shclaw.com.dbg
+
+# Build artifacts
+build/
+build-cosmo/
+
+# Runtime data
+data/
+logs/
+
+# Compiled plugins (.c sources are kept)
+plugins/*.so
+
+# Config with real API keys
+etc/config.ini
+etc/agents/*.ini
+
+# Vendor libraries (fetched by vendor.sh)
+vendor/bearssl/
+vendor/tcc/
+vendor/cjson/
+vendor/cosmo/
+vendor/smolbsd/
+
+# Docker/smolBSD build copies
+docker/shclaw
+smolbsd/shclaw.com
+
+# Editor / OS
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.claude
+.DS_Store
+Thumbs.db
+
+# Claude
+CLAUDE.md
