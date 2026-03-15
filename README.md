@@ -111,7 +111,7 @@ For the Cosmopolitan build, the toolchain is also auto-fetched (~40MB download, 
 ### Build
 
 ```bash
-git clone https://github.com/YOUR/shclaw.git && cd shclaw
+git clone https://github.com/govlog/shclaw.git && cd shclaw
 
 # Linux only (musl-gcc, static, hardened)
 make musl          # => ./shclaw (~518K)
@@ -211,7 +211,7 @@ docker run -v ./my-instance:/app/instance shclaw
 
 #### smolBSD (NetBSD microVM)
 
-[smolBSD](https://github.com/NetBSDfr/smolBSD) by the NetBSD Foundation boots a minimal NetBSD VM in ~60ms via QEMU. Shclaw's Cosmopolitan binary runs natively on it.
+[smolBSD](https://github.com/NetBSDfr/smolBSD) boots a minimal NetBSD VM in ~60ms via QEMU. Shclaw's Cosmopolitan binary runs natively on it.
 
 ```bash
 # Fetch smolBSD (first time)
@@ -345,7 +345,7 @@ This project wouldn't exist without the work of:
 - **[Fabrice Bellard](https://bellard.org/)** — [TinyCC](https://bellard.org/tcc/). A complete C compiler small enough to embed as a library. This is what makes runtime plugin compilation possible.
 - **[Thomas Pornin](https://www.bearssl.org/)** — [BearSSL](https://bearssl.org/). A TLS implementation designed for embedded systems: small, no-allocation, constant-time crypto. It's why a sub-1MB binary can talk HTTPS.
 - **[Dave Gamble](https://github.com/DaveGamble/cJSON)** — [cJSON](https://github.com/DaveGamble/cJSON). Single-file JSON parser. Simple, reliable, handles everything the LLM APIs throw at it.
-- **[iMil](https://x.com/iMilnb)** — [smolBSD](https://github.com/NetBSDfr/smolBSD). Minimal NetBSD microVM framework. Boot a full BSD in 60ms.
+- **[iMil](https://x.com/iMilnb)** — [smolBSD](https://github.com/NetBSDfr/smolBSD). Minimal NetBSD microVM framework. Boot a full BSD in 20ms.
 
 ## License
 

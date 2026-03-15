@@ -111,7 +111,7 @@ Pour le build Cosmopolitan, la toolchain est aussi recuperee automatiquement (~4
 ### Compiler
 
 ```bash
-git clone https://github.com/YOUR/shclaw.git && cd shclaw
+git clone https://github.com/govlog/shclaw.git && cd shclaw
 
 # Linux uniquement (musl-gcc, statique, durci)
 make musl          # => ./shclaw (~518K)
@@ -211,7 +211,7 @@ docker run -v ./my-instance:/app/instance shclaw
 
 #### smolBSD (microVM NetBSD)
 
-[smolBSD](https://github.com/NetBSDfr/smolBSD) par NetBSDfr fait booter une VM NetBSD minimale en ~60ms via QEMU. Le binaire Cosmopolitan de shclaw tourne nativement dessus.
+[smolBSD](https://github.com/NetBSDfr/smolBSD) par iMiL fait booter une VM NetBSD minimale en ~20ms via QEMU. Le binaire Cosmopolitan de shclaw tourne nativement dessus.
 
 ```bash
 # Recuperer smolBSD (premiere fois)
