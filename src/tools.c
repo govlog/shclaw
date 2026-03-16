@@ -145,6 +145,15 @@ static const tool_def_t TOOLS[] = {
             {0}
         }
     },
+    [TOOL_CLEAR_MEMORY] = {
+        .name = "clear_memory",
+        .desc = "Clear an agent's memories and/or facts. Use agent='all' to clear every agent.",
+        .params = {
+            {"agent",  TC_STRING, "Agent name, or 'all' for every agent", 1},
+            {"what",   TC_STRING, "What to clear: 'memory', 'facts', or 'both' (default 'both')", 0},
+            {0}
+        }
+    },
 };
 
 static const char *type_to_json_str(int type) {
@@ -392,6 +401,52 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
             if (strcmp(ctx->messenger->agents[i], "owner") == 0) continue;
             off += snprintf(out + off, out_sz - off, "- %s\n",
                             ctx->messenger->agents[i]);
+        }
+        return out;
+    }
+
+    case TOOL_CLEAR_MEMORY: {
+        const char *agent = j_str(input, "agent");
+        const char *what = j_str(input, "what");
+        if (!agent || !agent[0]) { snprintf(out, out_sz, "Error: agent required"); return out; }
+        if (!what || !what[0]) what = "both";
+
+        int do_mem = (strcmp(what, "memory") == 0 || strcmp(what, "both") == 0);
+        int do_facts = (strcmp(what, "facts") == 0 || strcmp(what, "both") == 0);
+
+        if (strcmp(agent, "all") == 0) {
+            /* Clear all agents */
+            int cleared = 0;
+            for (int i = 0; i < ctx->messenger->n_agents; i++) {
+                const char *aname = ctx->messenger->agents[i];
+                if (strcmp(aname, "owner") == 0) continue;
+                char mem_dir[4200];
+                snprintf(mem_dir, sizeof(mem_dir), "%s/%s/memory", ctx->data_dir, aname);
+                memory_t tmp;
+                memory_init(&tmp, mem_dir);
+                if (do_mem) memory_clear(&tmp);
+                if (do_facts) facts_clear(&tmp);
+                cleared++;
+            }
+            /* Also clear own in-memory cache */
+            if (do_mem) memory_clear(&ctx->memory);
+            if (do_facts) facts_clear(&ctx->memory);
+            snprintf(out, out_sz, "Cleared %s for %d agents.", what, cleared);
+        } else {
+            if (strcmp(agent, ctx->name) == 0) {
+                /* Clear own memory */
+                if (do_mem) memory_clear(&ctx->memory);
+                if (do_facts) facts_clear(&ctx->memory);
+            } else {
+                /* Clear another agent's memory via filesystem */
+                char mem_dir[4200];
+                snprintf(mem_dir, sizeof(mem_dir), "%s/%s/memory", ctx->data_dir, agent);
+                memory_t tmp;
+                memory_init(&tmp, mem_dir);
+                if (do_mem) memory_clear(&tmp);
+                if (do_facts) facts_clear(&tmp);
+            }
+            snprintf(out, out_sz, "Cleared %s for %s.", what, agent);
         }
         return out;
     }

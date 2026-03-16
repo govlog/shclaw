@@ -33,6 +33,7 @@ static int find_tool(const char *name) {
         [TOOL_SEND_MESSAGE] = "send_message",
         [TOOL_LIST_AGENTS] = "list_agents",
         [TOOL_CREATE_PLUGIN] = "create_plugin",
+        [TOOL_CLEAR_MEMORY] = "clear_memory",
     };
 
     for (int i = 0; i < TOOL_COUNT; i++)
@@ -241,6 +242,43 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
 
             for (int i = 0; i < resp.n_tools; i++) {
                 log_info("[%s] Tool: %s", agent->name, resp.tool_calls[i].name);
+
+                /* Show tool call on IRC/TUI as ACTION */
+                if (agent->irc) {
+                    char action[384];
+                    /* Build compact param summary from input JSON */
+                    char params[256] = "";
+                    cJSON *inp = cJSON_Parse(resp.tool_calls[i].input_json);
+                    if (inp) {
+                        int poff = 0;
+                        cJSON *item;
+                        cJSON_ArrayForEach(item, inp) {
+                            const char *k = item->string;
+                            char val[80];
+                            if (cJSON_IsString(item)) {
+                                /* Truncate long strings (e.g. code) */
+                                snprintf(val, sizeof(val), "%.60s%s",
+                                         item->valuestring,
+                                         strlen(item->valuestring) > 60 ? "..." : "");
+                            } else if (cJSON_IsNumber(item)) {
+                                snprintf(val, sizeof(val), "%g", item->valuedouble);
+                            } else if (cJSON_IsBool(item)) {
+                                snprintf(val, sizeof(val), "%s",
+                                         cJSON_IsTrue(item) ? "true" : "false");
+                            } else {
+                                snprintf(val, sizeof(val), "{...}");
+                            }
+                            int wrote = snprintf(params + poff, sizeof(params) - poff,
+                                                 "%s%s=%s", poff ? ", " : "", k, val);
+                            poff += wrote;
+                            if (poff >= (int)sizeof(params) - 1) break;
+                        }
+                        cJSON_Delete(inp);
+                    }
+                    snprintf(action, sizeof(action), "calls %s(%s)",
+                             resp.tool_calls[i].name, params);
+                    irc_action(agent->irc, agent->name, action);
+                }
 
                 /* Log tool call to session */
                 if (thread_id && agent->sessions) {

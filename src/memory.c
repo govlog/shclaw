@@ -213,6 +213,16 @@ const char *memory_get_relevant(memory_t *m, cJSON *hints, int max_results,
     return memory_search(m, first_hint, max_results, out, out_sz);
 }
 
+void memory_clear(memory_t *m) {
+    pthread_mutex_lock(&m->lock);
+    if (m->cache) {
+        cJSON_Delete(m->cache);
+        m->cache = NULL;
+    }
+    unlink(memory_log_path(m));
+    pthread_mutex_unlock(&m->lock);
+}
+
 /* ── Facts ──────────────────────────────────────────────── */
 
 static cJSON *load_facts(memory_t *m) {
@@ -253,6 +263,12 @@ const char *facts_set(memory_t *m, const char *key, const char *value,
 
     snprintf(out, out_sz, "Fact saved: %s = %s", key, value);
     return out;
+}
+
+void facts_clear(memory_t *m) {
+    pthread_mutex_lock(&m->lock);
+    atomic_write(facts_path(m), "{}", 2);
+    pthread_mutex_unlock(&m->lock);
 }
 
 const char *facts_get(memory_t *m, const char *key,

@@ -10,6 +10,13 @@
  * Required exports:
  *   const char *TC_PLUGIN_NAME  — unique tool name
  *   const char *TC_PLUGIN_DESC  — one-line description
+ *
+ * Optional exports:
+ *   const char *TC_PLUGIN_SCHEMA — JSON string defining input_schema
+ *     Example: "{"type":"object","properties":{"a":{"type":"number","description":"First number"},"b":{"type":"number","description":"Second number"}},"required":["a","b"]}"
+ *     If not provided, an empty properties object is used.
+ *
+ * Required:
  *   const char *tc_execute(const char *input_json)
  *     input_json is a JSON object with the tool's parameters.
  *     Return a static or malloc'd string with the result.
@@ -87,6 +94,12 @@ int   tc_json_array_size(void *json);
 
 /* Get string value from JSON node. Returns NULL if not a string. */
 const char *tc_json_string(void *json);
+
+/* Get integer value from JSON node. Returns 0 if not a number. */
+int tc_json_int(void *json);
+
+/* Get double value from JSON node. Returns 0.0 if not a number. */
+double tc_json_double(void *json);
 
 /* ── Logging ── */
 

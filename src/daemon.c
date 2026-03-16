@@ -200,6 +200,7 @@ static void load_agent(daemon_t *d, const char *ini_path) {
     a->sessions = &d->sessions;
     a->plugins = &d->plugins;
     a->irc = &d->irc;
+    a->data_dir = d->data_dir;
     pthread_mutex_init(&a->session_lock, NULL);
     a->last_session_time = 0;
 

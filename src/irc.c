@@ -279,6 +279,24 @@ void irc_reply(irc_t *irc, const char *agent_name, const char *text) {
     }
 }
 
+void irc_action(irc_t *irc, const char *agent_name, const char *text) {
+    if (!irc || !text || !text[0]) return;
+
+    char line[512];
+    snprintf(line, sizeof(line), "* %s %s", agent_name ? agent_name : "system", text);
+
+    /* Broadcast to TUI clients */
+    if (irc->ctx)
+        daemon_tui_broadcast((daemon_t *)irc->ctx, NULL, line);
+
+    /* Send to IRC as CTCP ACTION */
+    if (irc->fd < 0) return;
+    char action[512];
+    int n = snprintf(action, sizeof(action) - 2, "%s %s", agent_name, text);
+    if (n > 400) n = 400;
+    irc_sendf(irc, "PRIVMSG %s :\x01""ACTION %.*s\x01", irc->channel, n, action);
+}
+
 void irc_disconnect(irc_t *irc) {
     if (irc->fd >= 0) {
         irc_sendf(irc, "QUIT :shclaw shutting down");

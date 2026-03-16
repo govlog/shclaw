@@ -271,7 +271,7 @@ Crée `$PREFIX/{bin,etc,etc/agents,plugins,include,data,logs}`.
 
 ## Outils des agents
 
-Les agents disposent de 15 outils intégrés :
+Les agents disposent de 16 outils intégrés :
 
 | Outil | Ce qu'il fait |
 |-------|---------------|
@@ -290,6 +290,7 @@ Les agents disposent de 15 outils intégrés :
 | `send_message` | Envoyer un message à un autre agent, au propriétaire (via IRC), ou en broadcast |
 | `list_agents` | Lister les agents actifs |
 | `create_plugin` | Écrire du C + compiler via TCC (agents builder uniquement) |
+| `clear_memory` | Effacer les souvenirs et/ou faits d'un agent (un agent ou tous) |
 
 Les plugins écrits par les agents deviennent des outils disponibles pour tous les agents immédiatement.
 
@@ -328,7 +329,7 @@ Fonctions disponibles (injectées par le daemon à la compilation) :
 | Chaînes | `tc_strlen`, `tc_strcmp`, `tc_strncmp`, `tc_strcpy`, `tc_strncpy`, `tc_snprintf`, `tc_memcpy`, `tc_memset` |
 | Fichiers | `tc_read_file`, `tc_write_file` |
 | HTTP | `tc_http_get`, `tc_http_post`, `tc_http_post_json`, `tc_http_header` |
-| JSON | `tc_json_parse`, `tc_json_free`, `tc_json_print`, `tc_json_get`, `tc_json_index`, `tc_json_array_size`, `tc_json_string` |
+| JSON | `tc_json_parse`, `tc_json_free`, `tc_json_print`, `tc_json_get`, `tc_json_index`, `tc_json_array_size`, `tc_json_string`, `tc_json_int`, `tc_json_double` |
 | Système | `tc_gethostname` |
 | Logging | `tc_log` |
 

@@ -96,6 +96,7 @@ typedef enum {
     TOOL_SEND_MESSAGE,
     TOOL_LIST_AGENTS,
     TOOL_CREATE_PLUGIN,
+    TOOL_CLEAR_MEMORY,
     TOOL_COUNT,
 } tool_id_t;
 
@@ -249,6 +250,8 @@ const char *facts_set(memory_t *m, const char *key, const char *value,
                       char *out, size_t out_sz);
 const char *facts_get(memory_t *m, const char *key,
                       char *out, size_t out_sz);
+void        memory_clear(memory_t *m);
+void        facts_clear(memory_t *m);
 
 /* ── Scheduler ──────────────────────────────────────────── */
 
@@ -310,6 +313,7 @@ typedef struct {
 int  irc_connect(irc_t *irc, const char *host, int port);
 int  irc_poll(irc_t *irc);
 void irc_reply(irc_t *irc, const char *agent_name, const char *text);
+void irc_action(irc_t *irc, const char *agent_name, const char *text);
 void irc_disconnect(irc_t *irc);
 int  irc_fd(irc_t *irc);
 
@@ -434,6 +438,7 @@ struct agent_ctx {
     session_store_t *sessions;
     plugin_registry_t *plugins;
     irc_t       *irc;
+    char        *data_dir;
     char         objectives[16][256];
     int          n_objectives;
 

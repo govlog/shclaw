@@ -137,6 +137,16 @@ static const char *tc_plugin_json_string(void *node) {
     return cJSON_GetStringValue((cJSON *)node);
 }
 
+static int tc_plugin_json_int(void *node) {
+    cJSON *n = (cJSON *)node;
+    return (n && cJSON_IsNumber(n)) ? n->valueint : 0;
+}
+
+static double tc_plugin_json_double(void *node) {
+    cJSON *n = (cJSON *)node;
+    return (n && cJSON_IsNumber(n)) ? n->valuedouble : 0.0;
+}
+
 int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
     if (!tc_plugins_available()) {
         log_warn("plugin: not supported on this platform");
@@ -189,6 +199,8 @@ int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
     tcc_add_symbol(tcc, "tc_json_index",      cJSON_GetArrayItem);
     tcc_add_symbol(tcc, "tc_json_array_size", cJSON_GetArraySize);
     tcc_add_symbol(tcc, "tc_json_string",     tc_plugin_json_string);
+    tcc_add_symbol(tcc, "tc_json_int",        tc_plugin_json_int);
+    tcc_add_symbol(tcc, "tc_json_double",     tc_plugin_json_double);
 
     if (tcc_add_file(tcc, src_path) == -1) {
         log_error("plugin: compile failed: %s", src_path);
@@ -251,9 +263,20 @@ int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
     p->schema = cJSON_CreateObject();
     cJSON_AddStringToObject(p->schema, "name", *pname);
     cJSON_AddStringToObject(p->schema, "description", pdesc ? *pdesc : "Plugin tool");
-    cJSON *input_schema = cJSON_CreateObject();
-    cJSON_AddStringToObject(input_schema, "type", "object");
-    cJSON_AddItemToObject(input_schema, "properties", cJSON_CreateObject());
+
+    /* Check if plugin exports TC_PLUGIN_SCHEMA (JSON string for input_schema) */
+    const char **pschema = tcc_get_symbol(tcc, "TC_PLUGIN_SCHEMA");
+    cJSON *input_schema = NULL;
+    if (pschema && *pschema) {
+        input_schema = cJSON_Parse(*pschema);
+        if (!input_schema)
+            log_warn("plugin: %s has invalid TC_PLUGIN_SCHEMA JSON, using empty", *pname);
+    }
+    if (!input_schema) {
+        input_schema = cJSON_CreateObject();
+        cJSON_AddStringToObject(input_schema, "type", "object");
+        cJSON_AddItemToObject(input_schema, "properties", cJSON_CreateObject());
+    }
     cJSON_AddItemToObject(p->schema, "input_schema", input_schema);
 
     pthread_mutex_unlock(&r->lock);
