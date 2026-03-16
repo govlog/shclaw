@@ -1,4 +1,4 @@
-; Jarvis — hub agent (receives unmentioned IRC messages)
+; Jarvis -- hub agent (receives unmentioned IRC messages)
 
 [agent]
 name       = jarvis

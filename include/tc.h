@@ -344,6 +344,7 @@ typedef struct {
     time_t failed_mtime[TC_MAX_PLUGINS]; /* track failed compiles to avoid log spam */
     char   failed_src[TC_MAX_PLUGINS][4096];
     int    n_failed;
+    char   last_error[TC_BUF_LG];       /* captured TCC error for create_plugin feedback */
 } plugin_registry_t;
 
 void        plugin_init(plugin_registry_t *r, const char *plugins_dir);

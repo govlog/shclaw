@@ -82,23 +82,37 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
         off += snprintf(objectives + off, sizeof(objectives) - off,
                         "- %s\n", agent->objectives[i]);
 
+    const char *comm_rules;
+    if (trig_type == TRIG_AGENT_MSG)
+        comm_rules =
+            "## Communication (message inter-agent)\n"
+            "Tu as reçu un message d'un autre agent.\n"
+            "- Pour RÉPONDRE à cet agent: utilise send_message.\n"
+            "- Pour informer LE PROPRIÉTAIRE: utilise send_message(to='owner').\n"
+            "- Ne renvoie PAS un résumé de ta réponse à l'agent expéditeur. Un seul send_message suffit.\n"
+            "- Ne relaye PAS la réponse d'un agent vers ce même agent.\n"
+            "- Si le message ne demande rien d'actionnable, termine sans répondre.\n\n";
+    else
+        comm_rules =
+            "## Communication\n"
+            "Pour RÉPONDRE AU PROPRIÉTAIRE: réponds directement en texte.\n"
+            "Pour contacter UN AUTRE AGENT: utilise send_message.\n"
+            "N'utilise PAS send_message(to='owner') — c'est redondant.\n\n";
+
     snprintf(out, out_sz,
         "Tu es %s.\n%s\n\n%s\n"
         "%s"
         "## Ce qui t'a réveillé\n"
         "Type: %s\n%s\n\n"
         "## Thread actif: %s\n"
-        "Pour RÉPONDRE AU PROPRIÉTAIRE: réponds directement en texte.\n"
-        "Pour contacter UN AUTRE AGENT: utilise send_message.\n"
-        "N'utilise PAS send_message(to='owner') — c'est redondant.\n\n"
+        "%s"
         "## Objectifs\n%s\n"
         "## Autres agents\n%s\n"
         "## Tâches planifiées\n%s\n"
         "## Souvenirs récents\n%s\n"
         "## Règles\n"
-        "1. Quand le proprio te parle, réponds directement en texte.\n"
-        "2. Sois concis. Termine vite si rien à faire.\n"
-        "3. Pas de dépenses sans autorisation.\n\n"
+        "1. Sois concis. Termine vite si rien à faire.\n"
+        "2. Pas de dépenses sans autorisation.\n\n"
         "## Maintenant\n%s\nAgis.\n",
         agent->name, agent->personality, agent->system_prompt_extra,
         agent->is_hub ?
@@ -106,6 +120,7 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
         trigger_type_str(trig_type),
         trig_data ? trig_data : "(aucune donnée)",
         thread_id ? thread_id : "(none)",
+        comm_rules,
         objectives[0] ? objectives : "Aucun.\n",
         agents_text[0] ? agents_text : "Aucun.\n",
         schedule,
@@ -187,7 +202,8 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
                 session_add_message(agent->sessions, thread_id,
                                     agent->name, "", resp.text_blocks[i].text, mt);
 
-            /* Echo text responses to IRC (any trigger that should reach the owner) */
+            /* Echo text responses to IRC/TUI (not agent_msg -- those are
+               shown via send_message in tools.c to avoid duplicates) */
             if (mt == MSG_TEXT && agent->irc &&
                 (trig_type == TRIG_IRC || trig_type == TRIG_SCHEDULE ||
                  trig_type == TRIG_SOCKET))

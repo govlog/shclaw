@@ -1,4 +1,4 @@
-; Oracle — research and analysis agent
+; Oracle -- research and analysis agent
 
 [agent]
 name       = oracle

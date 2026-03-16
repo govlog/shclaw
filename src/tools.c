@@ -374,6 +374,13 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
                                 delegation_msg, MSG_DELEGATION);
         }
 
+        /* Show inter-agent message on IRC/TUI */
+        if (ctx->irc) {
+            char prefix[96];
+            snprintf(prefix, sizeof(prefix), "%s => %s", ctx->name, to);
+            irc_reply(ctx->irc, prefix, content);
+        }
+
         return messenger_send(ctx->messenger, ctx->name, to, content, NULL, out, out_sz);
     }
 
@@ -403,7 +410,11 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
         struct stat st;
         time_t mtime = (stat(src_path, &st) == 0) ? st.st_mtime : time(NULL);
         if (plugin_compile(ctx->plugins, src_path, mtime) != 0) {
-            snprintf(out, out_sz, "Compilation failed for %s.c", name);
+            if (ctx->plugins->last_error[0])
+                snprintf(out, out_sz, "Compilation failed for %s.c:\n%s",
+                         name, ctx->plugins->last_error);
+            else
+                snprintf(out, out_sz, "Compilation failed for %s.c", name);
             return out;
         }
 

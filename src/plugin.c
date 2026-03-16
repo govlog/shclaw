@@ -83,8 +83,15 @@ static void record_failure(plugin_registry_t *r, const char *src, time_t mtime) 
 }
 
 static void tcc_error_handler(void *opaque, const char *msg) {
-    (void)opaque;
+    plugin_registry_t *r = (plugin_registry_t *)opaque;
     log_error("tcc: %s", msg);
+    /* Append to last_error so the agent can see what went wrong */
+    if (r) {
+        size_t cur = strlen(r->last_error);
+        if (cur + 1 < sizeof(r->last_error))
+            snprintf(r->last_error + cur, sizeof(r->last_error) - cur,
+                     "%s%s", cur ? "\n" : "", msg);
+    }
 }
 
 /* ── Plugin-facing wrappers for libc primitives ── */
@@ -141,7 +148,8 @@ int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
         return -1;
     }
 
-    tcc_set_error_func(tcc, NULL, tcc_error_handler);
+    r->last_error[0] = '\0';
+    tcc_set_error_func(tcc, r, tcc_error_handler);
     tcc_set_options(tcc, "-nostdlib -nostdinc");
     tcc_set_lib_path(tcc, ".");
     tcc_set_output_type(tcc, TCC_OUTPUT_MEMORY);
