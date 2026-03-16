@@ -21,8 +21,7 @@ There is NO stdio.h, NO stdlib.h, NO string.h. They do not exist. TCC will rejec
 ## HOW TO CREATE A PLUGIN\n\
 Call the `create_plugin` tool with name, code, and description.\n\
 - Do NOT output code as text. Do NOT use exec or gcc.\n\
-- If compilation fails, read the error, fix, and call create_plugin again.\n\
-- If you fail 3+ times, STOP and report the problem via send_message.\n\n\
+- If compilation fails, read the error, fix, and call create_plugin again. Always retry.\n\n\
 ## TEMPLATE\n\
 ```c\n\
 #include "tc_plugin.h"\n\
