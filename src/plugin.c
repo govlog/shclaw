@@ -274,9 +274,12 @@ int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
     }
     if (!input_schema) {
         input_schema = cJSON_CreateObject();
-        cJSON_AddStringToObject(input_schema, "type", "object");
-        cJSON_AddItemToObject(input_schema, "properties", cJSON_CreateObject());
     }
+    /* Ensure "type": "object" is always present (Anthropic API requires it) */
+    if (!cJSON_GetObjectItem(input_schema, "type"))
+        cJSON_AddStringToObject(input_schema, "type", "object");
+    if (!cJSON_GetObjectItem(input_schema, "properties"))
+        cJSON_AddItemToObject(input_schema, "properties", cJSON_CreateObject());
     cJSON_AddItemToObject(p->schema, "input_schema", input_schema);
 
     pthread_mutex_unlock(&r->lock);
