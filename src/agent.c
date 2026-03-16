@@ -208,7 +208,8 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
             if (mt == MSG_TEXT && agent->irc &&
                 (trig_type == TRIG_IRC || trig_type == TRIG_SCHEDULE ||
                  trig_type == TRIG_SOCKET))
-                irc_reply(agent->irc, agent->name, resp.text_blocks[i].text);
+                irc_reply(agent->irc, agent->is_hub ? NULL : agent->name,
+                           resp.text_blocks[i].text);
         }
 
         if (resp.n_tools > 0) {
@@ -256,10 +257,15 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
                             const char *k = item->string;
                             char val[80];
                             if (cJSON_IsString(item)) {
-                                /* Truncate long strings (e.g. code) */
-                                snprintf(val, sizeof(val), "%.60s%s",
-                                         item->valuestring,
-                                         strlen(item->valuestring) > 60 ? "..." : "");
+                                /* Skip multiline values (e.g. code), show length */
+                                if (strchr(item->valuestring, '\n')) {
+                                    snprintf(val, sizeof(val), "<%d chars>",
+                                             (int)strlen(item->valuestring));
+                                } else {
+                                    snprintf(val, sizeof(val), "%.60s%s",
+                                             item->valuestring,
+                                             strlen(item->valuestring) > 60 ? "..." : "");
+                                }
                             } else if (cJSON_IsNumber(item)) {
                                 snprintf(val, sizeof(val), "%g", item->valuedouble);
                             } else if (cJSON_IsBool(item)) {

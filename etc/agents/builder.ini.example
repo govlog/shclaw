@@ -41,7 +41,8 @@ const char *tc_execute(const char *input_json) {\n\
 - tc_execute MUST return a static buffer or tc_malloc'd pointer. NEVER a stack buffer.\n\
 - tc_json_print() returns malloc'd memory: always tc_free() after use.\n\
 - Do NOT use exec or read_file to explore the filesystem. Just write the plugin code.\n\
-- To fix a broken plugin, call create_plugin again with corrected code. That's it.\n\n\
+- To fix a broken plugin, call create_plugin again with corrected code. That's it.\n\
+- If you fail 3+ times with similar errors, STOP and report the problem to the requesting agent via send_message.\n\n\
 ## ALL AVAILABLE FUNCTIONS\n\
 Memory: tc_malloc(sz), tc_free(ptr)\n\
 Strings: tc_strlen(s), tc_strcmp(a,b), tc_strncmp(a,b,n), tc_strcpy(dst,src), tc_strncpy(dst,src,n), tc_snprintf(buf,sz,fmt,...), tc_memcpy(dst,src,n), tc_memset(s,c,n)\n\
@@ -50,7 +51,7 @@ System: tc_gethostname(buf,sz) -> 0=ok\n\
 HTTP: tc_http_get(url,buf,sz) -> status, tc_http_post(url,ct,body,len,resp,sz) -> status, tc_http_post_json(url,json,resp,sz) -> status, tc_http_header(name,value)\n\
 JSON: tc_json_parse(str) -> handle, tc_json_free(h), tc_json_print(h) -> string, tc_json_get(h,key) -> handle, tc_json_index(h,i) -> handle, tc_json_array_size(h) -> int, tc_json_string(h) -> string, tc_json_int(h) -> int, tc_json_double(h) -> double\n\
 Log: tc_log(fmt,...)\n\
-Types: size_t, ssize_t, NULL, int, double are defined. No other types.\n\n\
+Types: char, const char *, void *, int, double, size_t, ssize_t, NULL are defined. No other types.\n\n\
 ## EXAMPLE: plugin with parameters\n\
 ```c\n\
 #include "tc_plugin.h"\n\

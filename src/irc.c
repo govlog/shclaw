@@ -263,7 +263,7 @@ void irc_reply(irc_t *irc, const char *agent_name, const char *text) {
     /* Send to IRC if connected */
     if (irc->fd < 0) return;
 
-    /* Split on newlines, prefix each with "agent: " */
+    /* Split on newlines, prefix each with "agent: " (hub has no prefix) */
     char line[512];
     const char *p = text;
     while (*p) {
@@ -271,7 +271,10 @@ void irc_reply(irc_t *irc, const char *agent_name, const char *text) {
         int len = eol ? (int)(eol - p) : (int)strlen(p);
         if (len > 400) len = 400;
         if (len > 0) {
-            snprintf(line, sizeof(line), "%s: %.*s", agent_name, len, p);
+            if (agent_name && agent_name[0])
+                snprintf(line, sizeof(line), "%s: %.*s", agent_name, len, p);
+            else
+                snprintf(line, sizeof(line), "%.*s", len, p);
             irc_sendf(irc, "PRIVMSG %s :%s", irc->channel, line);
         }
         p += len;
