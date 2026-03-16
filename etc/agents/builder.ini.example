@@ -34,19 +34,43 @@ const char *tc_execute(const char *input_json) {\n\
 }\n\
 ```\n\n\
 ## RULES\n\
-- ONLY use tc_* functions. NO libc functions (no printf, snprintf, strlen, malloc, atoi, etc).\n\
+- ONLY use functions declared below. NO libc (no printf, snprintf, strlen, malloc, atoi).\n\
 - These DO NOT EXIST: tc_json_number, tc_json_float, tc_json_value. Use tc_json_int() or tc_json_double().\n\
 - tc_execute MUST return a static buffer or tc_malloc'd pointer.\n\
-- tc_json_print() returns malloc'd memory: always tc_free() after use.\n\n\
-## ALL tc_* FUNCTIONS (nothing else exists)\n\
-Memory: tc_malloc(sz), tc_free(ptr)\n\
-Strings: tc_strlen(s), tc_strcmp(a,b), tc_strncmp(a,b,n), tc_strcpy(dst,src), tc_strncpy(dst,src,n), tc_snprintf(buf,sz,fmt,...), tc_memcpy(dst,src,n), tc_memset(s,c,n)\n\
-Files: tc_read_file(path,buf,sz) -> bytes or -1, tc_write_file(path,data,len) -> 0=ok\n\
-System: tc_gethostname(buf,sz) -> 0=ok\n\
-HTTP: tc_http_get(url,buf,sz) -> status, tc_http_post(url,ct,body,len,resp,sz) -> status, tc_http_post_json(url,json,resp,sz) -> status, tc_http_header(name,value)\n\
-JSON: tc_json_parse(str) -> handle, tc_json_free(h), tc_json_print(h) -> string, tc_json_get(h,key) -> handle, tc_json_index(h,i) -> handle, tc_json_array_size(h) -> int, tc_json_string(h) -> string, tc_json_int(h) -> int, tc_json_double(h) -> double\n\
-Log: tc_log(fmt,...)\n\
-Types: char, const char *, void *, int, double, size_t, ssize_t, NULL.\n\n\
+- tc_json_print() returns malloc'd string: always tc_free() after use.\n\n\
+## tc_plugin.h (this is the COMPLETE API, nothing else exists)\n\
+```c\n\
+typedef unsigned long size_t;\n\
+typedef long ssize_t;\n\
+#define NULL ((void *)0)\n\
+void *tc_malloc(size_t sz);\n\
+void  tc_free(void *ptr);\n\
+int   tc_strlen(const char *s);\n\
+void *tc_memcpy(void *dst, const void *src, size_t n);\n\
+void *tc_memset(void *s, int c, size_t n);\n\
+int   tc_strcmp(const char *a, const char *b);\n\
+int   tc_strncmp(const char *a, const char *b, size_t n);\n\
+char *tc_strcpy(char *dst, const char *src);\n\
+char *tc_strncpy(char *dst, const char *src, size_t n);\n\
+int   tc_snprintf(char *buf, size_t sz, const char *fmt, ...);\n\
+int   tc_read_file(const char *path, char *buf, size_t buf_sz);\n\
+int   tc_write_file(const char *path, const char *data, size_t len);\n\
+int   tc_gethostname(char *buf, size_t sz);\n\
+int   tc_http_get(const char *url, char *buf, size_t buf_sz);\n\
+int   tc_http_post(const char *url, const char *content_type, const char *body, size_t body_len, char *resp, size_t resp_sz);\n\
+int   tc_http_post_json(const char *url, const char *json, char *resp, size_t resp_sz);\n\
+void  tc_http_header(const char *name, const char *value);\n\
+void *tc_json_parse(const char *json);\n\
+void  tc_json_free(void *json);\n\
+char *tc_json_print(void *json);\n\
+void *tc_json_get(void *json, const char *key);\n\
+void *tc_json_index(void *json, int index);\n\
+int   tc_json_array_size(void *json);\n\
+const char *tc_json_string(void *json);\n\
+int   tc_json_int(void *json);\n\
+double tc_json_double(void *json);\n\
+void  tc_log(const char *fmt, ...);\n\
+```\n\n\
 ## EXAMPLE\n\
 ```c\n\
 #include "tc_plugin.h"\n\
