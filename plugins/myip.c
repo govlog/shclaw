@@ -3,8 +3,11 @@
 
 const char *TC_PLUGIN_NAME = "myip";
 const char *TC_PLUGIN_DESC = "Fetches public IP from ip.wtf and returns it";
+const char *TC_PLUGIN_SCHEMA =
+    "{\"type\":\"object\",\"properties\":{},\"required\":[]}";
 
 const char *tc_execute(const char *input_json) {
+    (void)input_json;
     static char buf[1024];
     static char result[1100];
 

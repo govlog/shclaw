@@ -352,7 +352,12 @@ const char *plugin_execute(plugin_registry_t *r, const char *name, cJSON *input,
         if (strcmp(r->plugins[i].name, name) == 0 && r->plugins[i].execute) {
             const char *(*fn)(const char *) = r->plugins[i].execute;
             const char *result = fn(input_json);
-            snprintf(out, out_sz, "%s", result ? result : "Plugin returned NULL");
+            if (!result)
+                snprintf(out, out_sz, "Plugin returned NULL");
+            else if (!result[0])
+                snprintf(out, out_sz, "%s", TC_EMPTY_OUTPUT_MARKER);
+            else
+                snprintf(out, out_sz, "%s", result);
             pthread_mutex_unlock(&r->lock);
             free(input_json);
             return out;

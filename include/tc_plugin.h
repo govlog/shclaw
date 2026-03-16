@@ -15,11 +15,26 @@
  *   const char *TC_PLUGIN_SCHEMA — JSON string defining input_schema
  *     Example: "{"type":"object","properties":{"a":{"type":"number","description":"First number"},"b":{"type":"number","description":"Second number"}},"required":["a","b"]}"
  *     If not provided, an empty properties object is used.
+ *     Best practice: always export it, even for tools with no inputs.
  *
  * Required:
  *   const char *tc_execute(const char *input_json)
  *     input_json is a JSON object with the tool's parameters.
  *     Return a static or malloc'd string with the result.
+ *
+ * Recommended scaffold:
+ *   #include "tc_plugin.h"
+ *   const char *TC_PLUGIN_NAME = "example";
+ *   const char *TC_PLUGIN_DESC = "Example plugin";
+ *   const char *TC_PLUGIN_SCHEMA =
+ *       "{\"type\":\"object\",\"properties\":{},\"required\":[]}";
+ *   static char result[1024];
+ *   const char *tc_execute(const char *input_json) { ... }
+ *
+ * Best practices:
+ *   - Read parameters from input_json with tc_json_* helpers.
+ *   - Use only tc_* functions declared in this header.
+ *   - Prefer static result buffers for returned strings.
  */
 
 #ifndef TC_PLUGIN_H

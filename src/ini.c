@@ -6,6 +6,77 @@
 
 #define INI_INITIAL_CAP 64
 
+static void ini_rstrip(char *s) {
+    size_t len = strlen(s);
+    while (len > 0) {
+        char c = s[len - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t')
+            break;
+        s[--len] = '\0';
+    }
+}
+
+static void ini_append(char *dst, size_t dst_sz, const char *src) {
+    size_t used = strlen(dst);
+    if (used + 1 >= dst_sz) return;
+    snprintf(dst + used, dst_sz - used, "%s", src);
+}
+
+static int ini_read_logical_line(FILE *f, char *out, size_t out_sz) {
+    char line[TC_BUF_LG];
+    int have_line = 0;
+
+    out[0] = '\0';
+
+    while (fgets(line, sizeof(line), f)) {
+        size_t len;
+        int continued;
+
+        len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        continued = (len > 0 && line[len - 1] == '\\');
+        if (continued)
+            line[--len] = '\0';
+
+        ini_append(out, out_sz, line);
+        have_line = 1;
+
+        if (!continued)
+            return 1;
+    }
+
+    return have_line;
+}
+
+static void ini_unescape(char *dst, size_t dst_sz, const char *src) {
+    size_t di = 0;
+
+    for (size_t i = 0; src[i] && di + 1 < dst_sz; i++) {
+        if (src[i] != '\\' || !src[i + 1]) {
+            dst[di++] = src[i];
+            continue;
+        }
+
+        i++;
+        switch (src[i]) {
+        case 'n':  dst[di++] = '\n'; break;
+        case 'r':  dst[di++] = '\r'; break;
+        case 't':  dst[di++] = '\t'; break;
+        case '\\': dst[di++] = '\\'; break;
+        case '"':  dst[di++] = '"'; break;
+        default:
+            dst[di++] = '\\';
+            if (di + 1 < dst_sz)
+                dst[di++] = src[i];
+            break;
+        }
+    }
+
+    dst[di] = '\0';
+}
+
 ini_t *ini_load(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return NULL;
@@ -15,13 +86,13 @@ ini_t *ini_load(const char *path) {
     ini->entries = calloc(ini->capacity, sizeof(ini_entry_t));
 
     char section[64] = "";
-    char line[1024];
+    char line[TC_BUF_XL];
 
-    while (fgets(line, sizeof(line), f)) {
-        /* Strip trailing whitespace / newline */
-        char *end = line + strlen(line) - 1;
-        while (end >= line && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
-            *end-- = '\0';
+    while (ini_read_logical_line(f, line, sizeof(line))) {
+        char value[TC_BUF_XL];
+        char *end;
+
+        ini_rstrip(line);
 
         /* Skip empty lines and comments */
         char *p = line;
@@ -48,8 +119,9 @@ ini_t *ini_load(const char *path) {
         char *val = eq + 1;
 
         /* Trim key */
-        end = key + strlen(key) - 1;
-        while (end >= key && (*end == ' ' || *end == '\t')) *end-- = '\0';
+        end = key + strlen(key);
+        while (end > key && (end[-1] == ' ' || end[-1] == '\t'))
+            *--end = '\0';
 
         /* Trim value leading spaces */
         while (*val == ' ' || *val == '\t') val++;
@@ -63,7 +135,8 @@ ini_t *ini_load(const char *path) {
         ini_entry_t *e = &ini->entries[ini->count++];
         snprintf(e->section, sizeof(e->section), "%s", section);
         snprintf(e->key, sizeof(e->key), "%s", key);
-        snprintf(e->value, sizeof(e->value), "%s", val);
+        ini_unescape(value, sizeof(value), val);
+        e->value = strdup(value);
     }
 
     fclose(f);
@@ -72,6 +145,8 @@ ini_t *ini_load(const char *path) {
 
 void ini_free(ini_t *ini) {
     if (!ini) return;
+    for (int i = 0; i < ini->count; i++)
+        free(ini->entries[i].value);
     free(ini->entries);
     free(ini);
 }

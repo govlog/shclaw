@@ -2,11 +2,13 @@
 
 const char *TC_PLUGIN_NAME = "hostname_writer";
 const char *TC_PLUGIN_DESC = "Ecrit le hostname dans /tmp/test";
+const char *TC_PLUGIN_SCHEMA =
+    "{\"type\":\"object\",\"properties\":{},\"required\":[]}";
 
 static char result[256];
 
-const char *tc_execute(const char *input) {
-    (void)input;
+const char *tc_execute(const char *input_json) {
+    (void)input_json;
     char host[128];
     if (tc_gethostname(host, sizeof(host)) != 0)
         return "error: gethostname failed";

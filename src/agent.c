@@ -42,6 +42,128 @@ static int find_tool(const char *name) {
     return -1;
 }
 
+static int builder_create_plugin_succeeded(const char *result) {
+    if (!result) return 0;
+    return strstr(result, "compiled and loaded.") != NULL ||
+           strstr(result, "self-test passed.") != NULL;
+}
+
+static void extract_agent_message_request(const char *trig_data,
+                                          char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!trig_data || !trig_data[0]) return;
+
+    cJSON *msgs = cJSON_Parse(trig_data);
+    if (!msgs || !cJSON_IsArray(msgs)) {
+        cJSON_Delete(msgs);
+        return;
+    }
+
+    cJSON *first = cJSON_GetArrayItem(msgs, 0);
+    const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(first, "content"));
+    if (content)
+        snprintf(out, out_sz, "%s", content);
+    cJSON_Delete(msgs);
+}
+
+static void builder_notify_stall(agent_ctx_t *agent, const char *thread_id,
+                                 const char *trig_data,
+                                 const char *last_text) {
+    if (!agent || !agent->sessions || !agent->messenger ||
+        !thread_id || !thread_id[0])
+        return;
+
+    cJSON *session = session_get(agent->sessions, thread_id);
+    if (!session) return;
+
+    const char *initiator =
+        cJSON_GetStringValue(cJSON_GetObjectItem(session, "initiator"));
+
+    if (initiator && initiator[0]) {
+        char msg[TC_BUF_LG];
+        char out[TC_BUF_MD];
+        char request[TC_BUF_MD];
+
+        extract_agent_message_request(trig_data, request, sizeof(request));
+
+        snprintf(msg, sizeof(msg),
+                 "Builder stalled: plugin request ended without "
+                 "create_plugin or send_message.\n"
+                 "Original request: %s\n"
+                 "Last model reply: %s",
+                 request[0] ? request : "(unknown)",
+                 (last_text && last_text[0]) ? last_text : "(empty)");
+
+        messenger_send(agent->messenger, agent->name, initiator,
+                       msg, thread_id, out, sizeof(out));
+        session_add_message(agent->sessions, thread_id,
+                            agent->name, initiator, msg, MSG_DELEGATION);
+    } else if (agent->irc) {
+        irc_reply(agent->irc, agent->name,
+                  "Builder stalled: plugin request ended without action.");
+    }
+
+    cJSON_Delete(session);
+}
+
+static void builder_notify_success(agent_ctx_t *agent, const char *thread_id,
+                                   const char *trig_data,
+                                   const char *result_text) {
+    if (!agent || !agent->sessions || !agent->messenger ||
+        !thread_id || !thread_id[0])
+        return;
+
+    cJSON *session = session_get(agent->sessions, thread_id);
+    if (!session) return;
+
+    const char *initiator =
+        cJSON_GetStringValue(cJSON_GetObjectItem(session, "initiator"));
+
+    if (initiator && initiator[0]) {
+        char msg[TC_BUF_LG];
+        char out[TC_BUF_MD];
+        char request[TC_BUF_MD];
+
+        extract_agent_message_request(trig_data, request, sizeof(request));
+
+        snprintf(msg, sizeof(msg),
+                 "Builder completed the plugin request.\n"
+                 "Original request: %s\n"
+                 "Result: %s",
+                 request[0] ? request : "(unknown)",
+                 (result_text && result_text[0]) ? result_text : "(no result)");
+
+        messenger_send(agent->messenger, agent->name, initiator,
+                       msg, thread_id, out, sizeof(out));
+        session_add_message(agent->sessions, thread_id,
+                            agent->name, initiator, msg, MSG_DELEGATION);
+    } else if (agent->irc) {
+        irc_reply(agent->irc, agent->name,
+                  "Builder completed the plugin request.");
+    }
+
+    cJSON_Delete(session);
+}
+
+static int builder_read_file_duplicate(const char *input_json,
+                                       char seen[][TC_BUF_SM],
+                                       int n_seen) {
+    if (!input_json) return 0;
+    for (int i = 0; i < n_seen; i++)
+        if (strcmp(seen[i], input_json) == 0)
+            return 1;
+    return 0;
+}
+
+static void builder_mark_read_file(const char *input_json,
+                                   char seen[][TC_BUF_SM],
+                                   int *n_seen) {
+    if (!input_json || !n_seen || *n_seen >= 16) return;
+    snprintf(seen[*n_seen], TC_BUF_SM, "%s", input_json);
+    (*n_seen)++;
+}
+
 void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
                                const char *trig_data, const char *thread_id,
                                const char **all_agents, int n_agents,
@@ -83,6 +205,24 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
         off += snprintf(objectives + off, sizeof(objectives) - off,
                         "- %s\n", agent->objectives[i]);
 
+    const char *builder_rules = agent->is_builder ?
+        "## Workflow Builder\n"
+        "- Avant create_plugin, lis include/tc_plugin.h.\n"
+        "- Lis plugins/_template.c puis un plugin similaire si besoin.\n"
+        "- Une fois un fichier de reference lu dans cette session, ne le relis pas.\n"
+        "- Pour lire des fichiers locaux, prefere read_file a exec(cat ...).\n"
+        "- Ecris un seul fichier C avec #include \"tc_plugin.h\", "
+            "TC_PLUGIN_NAME, TC_PLUGIN_DESC, TC_PLUGIN_SCHEMA et "
+            "tc_execute(const char *input_json).\n"
+        "- Utilise uniquement les fonctions tc_* du header. Pas de libc, "
+            "pas de headers systeme.\n"
+        "- Donne a create_plugin un test_input_json court. Ajoute "
+            "expected_output quand le comportement est deterministe.\n"
+        "- Si la compilation echoue, corrige le code a partir de l'erreur "
+            "et reessaie.\n"
+        "- Ne decris pas ta prochaine etape puis stoppe: appelle "
+            "create_plugin, ou utilise send_message pour signaler l'echec.\n\n" : "";
+
     const char *comm_rules;
     if (trig_type == TRIG_AGENT_MSG)
         comm_rules =
@@ -103,6 +243,7 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
     snprintf(out, out_sz,
         "Tu es %s.\n%s\n\n%s\n"
         "%s"
+        "%s"
         "## Ce qui t'a réveillé\n"
         "Type: %s\n%s\n\n"
         "## Thread actif: %s\n"
@@ -113,11 +254,15 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
         "## Souvenirs récents\n%s\n"
         "## Règles\n"
         "1. Sois concis. Termine vite si rien à faire.\n"
-        "2. Pas de dépenses sans autorisation.\n\n"
+        "2. Pas de dépenses sans autorisation.\n"
+        "3. Si un outil renvoie une erreur, une sortie vide, ou "
+            "\"" TC_EMPTY_OUTPUT_MARKER "\", signale-le tel quel.\n"
+        "4. N'invente jamais un résultat attendu ou une sortie manquante.\n\n"
         "## Maintenant\n%s\nAgis.\n",
         agent->name, agent->personality, agent->system_prompt_extra,
         agent->is_hub ?
             "## Rôle de Hub\nTu es l'agent principal. Analyse les demandes et délègue si nécessaire.\n\n" : "",
+        builder_rules,
         trigger_type_str(trig_type),
         trig_data ? trig_data : "(aucune donnée)",
         thread_id ? thread_id : "(none)",
@@ -158,6 +303,12 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
     cJSON_AddItemToArray(messages, user_msg);
 
     int max_turns = agent->max_turns > 0 ? agent->max_turns : TC_MAX_TURNS;
+    int builder_retry_used = 0;
+    int builder_plugin_completed = 0;
+    int builder_sent_message = 0;
+    char builder_success_result[TC_BUF_LG] = "";
+    char builder_read_file_seen[16][TC_BUF_SM];
+    int n_builder_read_file_seen = 0;
 
     log_info("[%s] === SESSION (trigger: %s, thread: %s, model: %s) ===",
              agent->name, trigger_type_str(trig_type),
@@ -301,7 +452,17 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
                 int tid = find_tool(resp.tool_calls[i].name);
                 const char *result;
 
-                if (tid >= 0) {
+                if (agent->is_builder &&
+                    strcmp(resp.tool_calls[i].name, "read_file") == 0 &&
+                    builder_read_file_duplicate(resp.tool_calls[i].input_json,
+                                                builder_read_file_seen,
+                                                n_builder_read_file_seen)) {
+                    snprintf(result_buf, sizeof(result_buf),
+                             "Already read this file in the current builder "
+                             "session. Reuse the earlier content instead of "
+                             "calling read_file again.");
+                    result = result_buf;
+                } else if (tid >= 0) {
                     result = execute_tool(tid, input, agent, result_buf, sizeof(result_buf));
                 } else if (agent->plugins) {
                     /* Try plugins */
@@ -319,10 +480,28 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
 
                 cJSON_Delete(input);
 
+                if (agent->is_builder &&
+                    strcmp(resp.tool_calls[i].name, "read_file") == 0 &&
+                    !builder_read_file_duplicate(resp.tool_calls[i].input_json,
+                                                 builder_read_file_seen,
+                                                 n_builder_read_file_seen))
+                    builder_mark_read_file(resp.tool_calls[i].input_json,
+                                           builder_read_file_seen,
+                                           &n_builder_read_file_seen);
+
                 /* Log result to session */
                 if (thread_id && agent->sessions)
                     session_add_message(agent->sessions, thread_id,
                                         agent->name, "", result, MSG_TOOL_RESULT);
+
+                if (strcmp(resp.tool_calls[i].name, "create_plugin") == 0 &&
+                    builder_create_plugin_succeeded(result)) {
+                    builder_plugin_completed = 1;
+                    snprintf(builder_success_result, sizeof(builder_success_result),
+                             "%s", result);
+                }
+                if (strcmp(resp.tool_calls[i].name, "send_message") == 0)
+                    builder_sent_message = 1;
 
                 cJSON *tr = cJSON_CreateObject();
                 cJSON_AddStringToObject(tr, "type", "tool_result");
@@ -337,6 +516,37 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
         } else if (strcmp(resp.stop_reason, "end_turn") == 0) {
             cJSON_AddStringToObject(assistant, "content", text_combined);
             cJSON_AddItemToArray(messages, assistant);
+
+            if (agent->is_builder && trig_type == TRIG_AGENT_MSG) {
+                if (builder_plugin_completed && !builder_sent_message) {
+                    builder_notify_success(agent, thread_id, trig_data,
+                                           builder_success_result);
+                } else if (!builder_plugin_completed && !builder_sent_message) {
+                    if (!builder_retry_used) {
+                        cJSON *nudge = cJSON_CreateObject();
+                        cJSON_AddStringToObject(nudge, "role", "user");
+                        cJSON_AddStringToObject(
+                            nudge, "content",
+                            "Plugin creation was requested. Do not narrate your "
+                            "next step. Either call create_plugin now, or use "
+                            "send_message to explain why you cannot complete it.");
+                        cJSON_AddItemToArray(messages, nudge);
+                        builder_retry_used = 1;
+                        free(text_combined);
+                        llm_response_free(&resp);
+                        continue;
+                    }
+
+                    builder_notify_stall(agent, thread_id, trig_data, text_combined);
+                    log_error("[%s] Builder stalled: ended with text-only reply",
+                              agent->name);
+                    outcome = SESSION_FAILED;
+                    free(text_combined);
+                    llm_response_free(&resp);
+                    break;
+                }
+            }
+
             free(text_combined);
             llm_response_free(&resp);
             break;

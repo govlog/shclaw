@@ -73,7 +73,7 @@ The event loop is a single `poll()` call watching the IRC socket and the Unix do
 Each agent is defined by an INI file in `etc/agents/`. Two flags control special behavior:
 
 - **`hub = true`** -- This agent is the default recipient. Any IRC message that doesn't start with an `@mention` gets routed to the hub. There should be exactly one hub agent -- it's the "front desk" that handles general conversation and decides when to delegate to specialists via `send_message`. The hub doesn't need a big model -- something like `qwen3.5:9b` via Ollama or `gpt-4.1-nano` works well for routing and casual conversation.
-- **`builder = true`** -- This agent gets access to the `create_plugin` tool. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this -- it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). **This requires a capable model** (Claude Sonnet/Opus, GPT-4.1) -- smaller models will hallucinate libc headers or produce code that doesn't compile. Use the `builder.ini.example` template, it contains enough instructions in `system_prompt_extra` to keep the model on track.
+- **`builder = true`** -- This agent gets access to the `create_plugin` tool. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this -- it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). Strong models still work best here, but smaller models become much more reliable if they first read [`include/tc_plugin.h`](include/tc_plugin.h) and [`plugins/_template.c`](plugins/_template.c), then call `create_plugin` with a short `test_input_json` and retry from compiler or self-test errors. Use the `builder.ini.example` template for that retrieval-first workflow.
 
 A typical setup: a hub agent (general-purpose, cheap/local model), a research agent (analysis, standard model), and a builder agent (plugin creation, capable model). They coordinate via `send_message` -- file-based inboxes in `data/messages/<agent>/`, polled every 5 seconds by the daemon.
 
@@ -289,7 +289,7 @@ Agents have 16 built-in tools:
 | `get_fact` | Retrieve a fact |
 | `send_message` | Message another agent, the owner (via IRC), or broadcast |
 | `list_agents` | List running agents |
-| `create_plugin` | Write C source + compile via TCC (builder agents only) |
+| `create_plugin` | Write C source + compile via TCC, with optional self-test input/output checks (builder agents only) |
 | `clear_memory` | Clear an agent's memories and/or facts (target one agent or all) |
 
 Plugins written by agents become tools available to all agents immediately.
@@ -298,13 +298,15 @@ Plugins written by agents become tools available to all agents immediately.
 
 ## Plugin API
 
-Plugins are single `.c` files. They `#include "tc_plugin.h"` and export three symbols:
+Plugins are single `.c` files. They `#include "tc_plugin.h"` and export `TC_PLUGIN_NAME`, `TC_PLUGIN_DESC`, `tc_execute`, and preferably `TC_PLUGIN_SCHEMA` so the tool call schema is visible to every agent. The builder template lives in [`plugins/_template.c`](plugins/_template.c) and is ignored by the loader because of its `_` prefix.
 
 ```c
 #include "tc_plugin.h"
 
 const char *TC_PLUGIN_NAME = "weather";
 const char *TC_PLUGIN_DESC = "Get current weather for a city";
+const char *TC_PLUGIN_SCHEMA =
+    "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"City name\"}},\"required\":[\"city\"]}";
 
 const char *tc_execute(const char *input_json) {
     void *json = tc_json_parse(input_json);

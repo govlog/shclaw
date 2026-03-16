@@ -73,7 +73,7 @@ La boucle d'événements est un seul appel `poll()` qui surveille le socket IRC 
 Chaque agent est défini par un fichier INI dans `etc/agents/`. Deux flags contrôlent des comportements spéciaux :
 
 - **`hub = true`** -- Cet agent est le destinataire par défaut. Tout message IRC qui ne commence pas par un `@mention` est routé vers le hub. Il ne doit y en avoir qu'un -- c'est "l'accueil" qui gère la conversation générale et décide quand déléguer aux spécialistes via `send_message`. Le hub n'a pas besoin d'un gros modèle -- un truc comme `qwen3.5:9b` via Ollama ou `gpt-4.1-nano` marche bien pour le routage et la conversation courante.
-- **`builder = true`** -- Cet agent a accès à l'outil `create_plugin`. Il peut écrire du code source C et le faire compiler par le daemon en outil live via TCC. On ne veut pas que tous les agents aient ça -- c'est puissant et dangereux, donc on le donne à un agent dédié avec un prompt système qui connaît les contraintes de l'API plugin (`-nostdlib`, `tc_plugin.h` uniquement, pas de libc). **Il faut un modèle costaud pour ça** (Claude Sonnet/Opus, GPT-4.1) -- les petits modèles vont halluciner des headers libc ou produire du code qui ne compile pas. Utilisez le template `builder.ini.example`, il contient assez d'instructions dans `system_prompt_extra` pour garder le modèle sur les rails.
+- **`builder = true`** -- Cet agent a accès à l'outil `create_plugin`. Il peut écrire du code source C et le faire compiler par le daemon en outil live via TCC. On ne veut pas que tous les agents aient ça -- c'est puissant et dangereux, donc on le donne à un agent dédié avec un prompt système qui connaît les contraintes de l'API plugin (`-nostdlib`, `tc_plugin.h` uniquement, pas de libc). Les gros modèles restent meilleurs ici, mais les petits modèles deviennent beaucoup plus fiables s'ils lisent d'abord [`include/tc_plugin.h`](include/tc_plugin.h) et [`plugins/_template.c`](plugins/_template.c), puis appellent `create_plugin` avec un petit `test_input_json` et corrigent le code à partir des erreurs de compilation ou d'auto-test. Utilisez le template `builder.ini.example` pour ce workflow orienté récupération locale.
 
 Un setup typique : un agent hub (généraliste, modèle pas cher/local), un agent recherche (analyse, modèle standard), et un agent builder (création de plugins, modèle costaud). Ils se coordonnent via `send_message` -- des boîtes aux lettres fichier dans `data/messages/<agent>/`, consultées toutes les 5 secondes par le daemon.
 
@@ -289,7 +289,7 @@ Les agents disposent de 16 outils intégrés :
 | `get_fact` | Récupérer un fait |
 | `send_message` | Envoyer un message à un autre agent, au propriétaire (via IRC), ou en broadcast |
 | `list_agents` | Lister les agents actifs |
-| `create_plugin` | Écrire du C + compiler via TCC (agents builder uniquement) |
+| `create_plugin` | Écrire du C + compiler via TCC, avec auto-test optionnel via entrée/sortie attendue (agents builder uniquement) |
 | `clear_memory` | Effacer les souvenirs et/ou faits d'un agent (un agent ou tous) |
 
 Les plugins écrits par les agents deviennent des outils disponibles pour tous les agents immédiatement.
@@ -298,13 +298,15 @@ Les plugins écrits par les agents deviennent des outils disponibles pour tous l
 
 ## API Plugin
 
-Les plugins sont des fichiers `.c` unitaires. Ils font `#include "tc_plugin.h"` et exportent trois symboles :
+Les plugins sont des fichiers `.c` unitaires. Ils font `#include "tc_plugin.h"` et exportent `TC_PLUGIN_NAME`, `TC_PLUGIN_DESC`, `tc_execute`, et de préférence `TC_PLUGIN_SCHEMA` pour que le schéma d'appel soit visible par tous les agents. Le template builder est dans [`plugins/_template.c`](plugins/_template.c) et n'est pas chargé parce que son nom commence par `_`.
 
 ```c
 #include "tc_plugin.h"
 
 const char *TC_PLUGIN_NAME = "weather";
 const char *TC_PLUGIN_DESC = "Récupérer la météo pour une ville";
+const char *TC_PLUGIN_SCHEMA =
+    "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"Nom de la ville\"}},\"required\":[\"city\"]}";
 
 const char *tc_execute(const char *input_json) {
     void *json = tc_json_parse(input_json);

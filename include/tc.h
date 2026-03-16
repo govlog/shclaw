@@ -53,6 +53,7 @@
 #define TC_HTTP_TIMEOUT     120      /* seconds */
 #define TC_MAX_SCROLLBACK   200
 #define TC_IRC_LINE_MAX     480
+#define TC_EMPTY_OUTPUT_MARKER "[empty output]"
 
 /* ── Enums ──────────────────────────────────────────────── */
 
@@ -105,7 +106,7 @@ typedef enum {
 typedef struct {
     char section[64];
     char key[64];
-    char value[512];
+    char *value;
 } ini_entry_t;
 
 typedef struct {
@@ -424,8 +425,8 @@ const char *tool_exec_cmd(const char *cmd, int timeout,
 
 struct agent_ctx {
     char         name[32];
-    char         personality[1024];
-    char         system_prompt_extra[2048];
+    char         personality[TC_BUF_LG];
+    char         system_prompt_extra[TC_BUF_XL];
     char         specialty[256];
     char         owner_email[128];
     int          max_turns;
