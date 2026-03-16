@@ -35,13 +35,13 @@
 
 I got tired of bloatware. Every "AI agent framework" I looked at (with a few notable exceptions) pulled in half the npm registry or needed a Python virtualenv the size of a small country. I wanted something that would just *run*. No runtime, no interpreter, no package manager, no containers required. Just a binary and a kernel.
 
-So I wrote shclaw: a multi-agent AI orchestrator in C that compiles down to a single static binary under 1MB. It talks to LLMs (Claude, GPT, Ollama), lives on IRC, schedules its own tasks, remembers things across sessions, and — the part I find genuinely cool — it embeds a C compiler so agents can write and compile their own plugins at runtime. The whole thing runs natively on Linux, FreeBSD, NetBSD, and OpenBSD from the same ELF binary.
+So I wrote shclaw: a multi-agent AI orchestrator in C that compiles down to a single static binary under 1MB. It talks to LLMs (Claude, GPT, Ollama), lives on IRC, schedules its own tasks, remembers things across sessions, and -- the part I find genuinely cool -- it embeds a C compiler so agents can write and compile their own plugins at runtime. The whole thing runs natively on Linux, FreeBSD, NetBSD, and OpenBSD from the same ELF binary.
 
-This is a side project. A toy. Something I hack on because the problem space is interesting and because there's something satisfying about fitting TLS, HTTP, IRC, JSON parsing, an agentic loop, and a C compiler into 956 kilobytes — or just 518K if you only need Linux.
+This is a side project. A toy. Something I hack on because the problem space is interesting and because there's something satisfying about fitting TLS, HTTP, IRC, JSON parsing, an agentic loop, and a C compiler into 956 kilobytes -- or just 518K if you only need Linux.
 
-It's also largely vibe-coded. I had the building blocks, the architecture in my head, and enough C and systems knowledge to steer things — but the bulk of the code was written through a combination of Claude, Codex, and me yelling at both of them until the binary linked.
+It's also largely vibe-coded. I had the building blocks, the architecture in my head, and enough C and systems knowledge to steer things -- but the bulk of the code was written through a combination of Claude, Codex, and me yelling at both of them until the binary linked.
 
-> **Fair warning.** Shclaw gives autonomous AI agents access to shell commands, file I/O, and network calls. One of them can write and compile C at runtime. Run it somewhere you don't care about — a VM, a container, a Raspberry Pi on a VLAN.
+> **Fair warning.** Shclaw gives autonomous AI agents access to shell commands, file I/O, and network calls. One of them can write and compile C at runtime. Run it somewhere you don't care about -- a VM, a container, a Raspberry Pi on a VLAN.
 
 ```
 ~6000 lines of C · ~518K static (musl) · ~956K cross-platform (cosmo) · 4 operating systems
@@ -72,10 +72,10 @@ The event loop is a single `poll()` call watching the IRC socket and the Unix do
 
 Each agent is defined by an INI file in `etc/agents/`. Two flags control special behavior:
 
-- **`hub = true`** — This agent is the default recipient. Any IRC message that doesn't start with an `@mention` gets routed to the hub. There should be exactly one hub agent — it's the "front desk" that handles general conversation and decides when to delegate to specialists via `send_message`. The hub doesn't need a big model — something like `qwen3.5:9b` via Ollama or `gpt-4.1-nano` works well for routing and casual conversation.
-- **`builder = true`** — This agent gets access to the `create_plugin` tool. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this — it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). **This requires a capable model** (Claude Sonnet/Opus, GPT-4.1) — smaller models will hallucinate libc headers or produce code that doesn't compile. Use the `builder.ini.example` template, it contains enough instructions in `system_prompt_extra` to keep the model on track.
+- **`hub = true`** -- This agent is the default recipient. Any IRC message that doesn't start with an `@mention` gets routed to the hub. There should be exactly one hub agent -- it's the "front desk" that handles general conversation and decides when to delegate to specialists via `send_message`. The hub doesn't need a big model -- something like `qwen3.5:9b` via Ollama or `gpt-4.1-nano` works well for routing and casual conversation.
+- **`builder = true`** -- This agent gets access to the `create_plugin` tool. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this -- it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). **This requires a capable model** (Claude Sonnet/Opus, GPT-4.1) -- smaller models will hallucinate libc headers or produce code that doesn't compile. Use the `builder.ini.example` template, it contains enough instructions in `system_prompt_extra` to keep the model on track.
 
-A typical setup: a hub agent (general-purpose, cheap/local model), a research agent (analysis, standard model), and a builder agent (plugin creation, capable model). They coordinate via `send_message` — file-based inboxes in `data/messages/<agent>/`, polled every 5 seconds by the daemon.
+A typical setup: a hub agent (general-purpose, cheap/local model), a research agent (analysis, standard model), and a builder agent (plugin creation, capable model). They coordinate via `send_message` -- file-based inboxes in `data/messages/<agent>/`, polled every 5 seconds by the daemon.
 
 Right now, the only communication channels are IRC and the Unix socket (TUI/CLI). I'm planning to add more channels soon.
 
@@ -83,15 +83,15 @@ Right now, the only communication channels are IRC and the Unix socket (TUI/CLI)
 
 Each agent has two independent persistence mechanisms:
 
-**Memory** (`data/<agent>/memory/memory.jsonl`) — An append-only JSONL log. When an agent calls `remember`, a JSON object is appended with the content, a category (`general`, `project`, `person`, `event`, `error`), an importance score (1-10), tags, and a timestamp. When the agent calls `recall`, it searches by keyword and tag matching. The last N memories are injected into the system prompt at the start of each session, so the agent has context about past interactions.
+**Memory** (`data/<agent>/memory/memory.jsonl`) -- An append-only JSONL log. When an agent calls `remember`, a JSON object is appended with the content, a category (`general`, `project`, `person`, `event`, `error`), an importance score (1-10), tags, and a timestamp. When the agent calls `recall`, it searches by keyword and tag matching. The last N memories are injected into the system prompt at the start of each session, so the agent has context about past interactions.
 
-**Facts** (`data/<agent>/memory/facts.json`) — A flat key-value JSON object. When an agent calls `set_fact`, it stores a permanent association (`timezone` = `Europe/Paris`, `owner_name` = `Alice`). Facts are always included in the system prompt — they're the agent's "hard knowledge" that never gets pruned. Unlike memories which accumulate and may eventually need trimming, facts are meant to be few, precise, and permanent.
+**Facts** (`data/<agent>/memory/facts.json`) -- A flat key-value JSON object. When an agent calls `set_fact`, it stores a permanent association (`timezone` = `Europe/Paris`, `owner_name` = `Alice`). Facts are always included in the system prompt -- they're the agent's "hard knowledge" that never gets pruned. Unlike memories which accumulate and may eventually need trimming, facts are meant to be few, precise, and permanent.
 
 The idea: memories are for episodic recall ("last Tuesday the server had a disk issue"), facts are for identity and configuration ("the owner speaks French", "the prod server is 10.0.1.5").
 
 ### The TCC trick
 
-The single most unusual piece of shclaw is that it embeds [TinyCC](https://bellard.org/tcc/) (libtcc) — Fabrice Bellard's C compiler — as a library. When an agent wants to create a new tool, it writes C source code. The daemon feeds it to `tcc_compile_string()`, relocates it in-memory with `tcc_relocate()`, and resolves the entry point with `tcc_get_symbol()`. No `.so` file is ever written to disk. The compiled code lives in the process's address space and is callable immediately.
+The single most unusual piece of shclaw is that it embeds [TinyCC](https://bellard.org/tcc/) (libtcc) -- Fabrice Bellard's C compiler -- as a library. When an agent wants to create a new tool, it writes C source code. The daemon feeds it to `tcc_compile_string()`, relocates it in-memory with `tcc_relocate()`, and resolves the entry point with `tcc_get_symbol()`. No `.so` file is ever written to disk. The compiled code lives in the process's address space and is callable immediately.
 
 Plugins run in `-nostdlib` mode: no libc, no system headers. The daemon injects a curated set of functions (`tc_malloc`, `tc_http_get`, `tc_json_parse`, etc.) via `tcc_add_symbol()` before compilation. This is both a sandbox (plugins can't call arbitrary libc functions) and a convenience (plugins get TLS-enabled HTTP for free without linking anything).
 
@@ -99,17 +99,17 @@ On daemon restart, `plugin_scan()` recompiles all `.c` files in `plugins/`. Chan
 
 ### How the ELF runs on four kernels
 
-The musl build produces a standard Linux static binary (~518K, hardened with static-PIE, RELRO, NX, stack protector, FORTIFY_SOURCE). It works on x86_64, aarch64, and armv7l — architecture detection is automatic. I've tested it on a Raspberry Pi 3B+ running 32-bit Raspbian and it works fine (static-pie is disabled on armv7l due to musl/kernel quirks, falls back to plain `-static`).
+The musl build produces a standard Linux static binary (~518K, hardened with static-PIE, RELRO, NX, stack protector, FORTIFY_SOURCE). It works on x86_64, aarch64, and armv7l -- architecture detection is automatic. I've tested it on a Raspberry Pi 3B+ running 32-bit Raspbian and it works fine (static-pie is disabled on armv7l due to musl/kernel quirks, falls back to plain `-static`).
 
-The Cosmopolitan build is more interesting. [Cosmopolitan Libc](https://justine.lol/cosmopolitan/) by Justine Tunney provides a C library that targets multiple operating systems from the same binary. We compile with `x86_64-unknown-cosmo-cc` (not the fat `cosmocc` — TinyCC generates x86_64 ELF relocations, so we need the x86_64-specific toolchain). The `assimilate` step converts the APE (Actually Portable Executable) format to a native ELF that the kernel loads directly — no shell trampoline, no interpreter.
+The Cosmopolitan build is more interesting. [Cosmopolitan Libc](https://justine.lol/cosmopolitan/) by Justine Tunney provides a C library that targets multiple operating systems from the same binary. We compile with `x86_64-unknown-cosmo-cc` (not the fat `cosmocc` -- TinyCC generates x86_64 ELF relocations, so we need the x86_64-specific toolchain). The `assimilate` step converts the APE (Actually Portable Executable) format to a native ELF that the kernel loads directly -- no shell trampoline, no interpreter.
 
-The result: one 956K ELF binary that runs unmodified on Linux, NetBSD, FreeBSD, and OpenBSD. Same binary, four kernels. I've only tested Linux and NetBSD so far — FreeBSD and OpenBSD are on the list, I just haven't gotten around to it yet.
+The result: one 956K ELF binary that runs unmodified on Linux, NetBSD, FreeBSD, and OpenBSD. Same binary, four kernels. I've only tested Linux and NetBSD so far -- FreeBSD and OpenBSD are on the list, I just haven't gotten around to it yet.
 
 Getting TCC to work under Cosmopolitan required three patches (`patches/tcc-cosmo.patch`):
 
-1. **NULL guard in `tcc_split_path()`** — Cosmopolitan doesn't set `tcc_lib_path` by default; dereferencing it crashes. Fix: fallback to `"."`.
-2. **`strcpy` to `memcpy` for PLT names** — Cosmopolitan's `strcpy` uses SSE instructions (`memrchr16_sse`) that crash on certain stack-aligned small buffers. This one was fun to track down.
-3. **Skip empty section names** — `tcc_add_linker_symbols()` generates duplicate symbols for sections with empty names after dot-stripping.
+1. **NULL guard in `tcc_split_path()`** -- Cosmopolitan doesn't set `tcc_lib_path` by default; dereferencing it crashes. Fix: fallback to `"."`.
+2. **`strcpy` to `memcpy` for PLT names** -- Cosmopolitan's `strcpy` uses SSE instructions (`memrchr16_sse`) that crash on certain stack-aligned small buffers. This one was fun to track down.
+3. **Skip empty section names** -- `tcc_add_linker_symbols()` generates duplicate symbols for sections with empty names after dot-stripping.
 
 ### What's inside
 
@@ -120,7 +120,7 @@ Getting TCC to work under Cosmopolitan required three patches (`patches/tcc-cosm
 | JSON | [cJSON](https://github.com/DaveGamble/cJSON) by Dave Gamble | Parse/generate all LLM API payloads. Single file, ~1700 lines. |
 | C library | [musl](https://musl.libc.org/) or [Cosmopolitan](https://justine.lol/cosmopolitan/) | Static linking. musl for Linux, Cosmopolitan for cross-platform. |
 
-Everything else (HTTP/1.1 client, IRC client, INI parser, ANSI TUI, scheduler, memory system, plugin scanner) is written from scratch — about 6000 lines of C across 20 source files.
+Everything else (HTTP/1.1 client, IRC client, INI parser, ANSI TUI, scheduler, memory system, plugin scanner) is written from scratch -- about 6000 lines of C across 20 source files.
 
 ---
 
@@ -159,7 +159,7 @@ Shclaw uses flat INI files. No YAML, no JSON config, no env vars.
 mkdir -p etc/agents
 ```
 
-**`etc/config.ini`** — global settings (providers, tiers, IRC, paths):
+**`etc/config.ini`** -- global settings (providers, tiers, IRC, paths):
 
 ```ini
 [daemon]
@@ -181,7 +181,7 @@ standard = anthropic/claude-sonnet-4-6
 complex  = anthropic/claude-opus-4-6
 local    = ollama/llama3
 
-# Optional — remove this section to run without IRC
+# Optional -- remove this section to run without IRC
 [irc]
 server      = irc.libera.chat
 port        = 6697
@@ -191,7 +191,7 @@ channel_key = mysecretkey
 owner       = mynick
 ```
 
-**`etc/agents/jarvis.ini`** — one file per agent:
+**`etc/agents/jarvis.ini`** -- one file per agent:
 
 ```ini
 [agent]
@@ -259,10 +259,10 @@ The instance directory is mounted via 9P virtfs at `/mnt`. The VM boots, mounts 
 #### System install
 
 ```bash
-sudo make install PREFIX=/opt/shclaw
+make install PREFIX=~/.local/shclaw
 
-# The prefix is baked into the binary — it always looks there for config
-/opt/shclaw/bin/shclaw
+# The prefix is baked into the binary -- it always looks there for config
+~/.local/shclaw/bin/shclaw
 ```
 
 Creates `$PREFIX/{bin,etc,etc/agents,plugins,include,data,logs}`.
@@ -332,7 +332,7 @@ Available functions (injected by the daemon at compile time):
 | System | `tc_gethostname` |
 | Logging | `tc_log` |
 
-HTTP calls use the daemon's BearSSL stack — plugins get HTTPS for free.
+HTTP calls use the daemon's BearSSL stack -- plugins get HTTPS for free.
 
 ---
 
@@ -350,16 +350,15 @@ bot>    jarvis: CPU is at 12%, all good.
 bot>    oracle: I see 3 anomalies in the log...
 ```
 
-TLS is automatic on port 6697 (BearSSL). If no channel/key is configured, shclaw generates random ones — retrieve them with `shclaw irc-info`.
+TLS is automatic on port 6697 (BearSSL). If no channel/key is configured, shclaw generates random ones -- retrieve them with `shclaw irc-info`.
 
 ---
 
 ## Documentation status
 
-This is one person's side project. The code is the documentation for now. If you're interested in running this or contributing, feel free to open an issue — I'm happy to write better docs for the parts people actually want to use.
+This is one person's side project. The code is the documentation for now. If you're interested in running this or contributing, feel free to open an issue -- I'm happy to write better docs for the parts people actually want to use.
 
 Areas where help would be welcome:
-- Packaging for other distros (Alpine, Arch, NixOS)
 - ARM64 testing on NetBSD/FreeBSD
 - More plugin examples
 - Documentation in general
@@ -370,11 +369,11 @@ Areas where help would be welcome:
 
 This project wouldn't exist without the work of:
 
-- **[Justine Tunney](https://justine.lol/)** — [Cosmopolitan Libc](https://justine.lol/cosmopolitan/) and the APE format. The idea that a single binary can run on four operating systems, for real, without emulation.
-- **[Fabrice Bellard](https://bellard.org/)** — [TinyCC](https://bellard.org/tcc/). A complete C compiler small enough to embed as a library. This is what makes runtime plugin compilation possible.
-- **[Thomas Pornin](https://www.bearssl.org/)** — [BearSSL](https://bearssl.org/). A TLS implementation designed for embedded systems: small, no-allocation, constant-time crypto. It's why a sub-1MB binary can talk HTTPS.
-- **[Dave Gamble](https://github.com/DaveGamble/cJSON)** — [cJSON](https://github.com/DaveGamble/cJSON). Single-file JSON parser. Simple, reliable, handles everything the LLM APIs throw at it.
-- **[iMil](https://x.com/iMilnb)** — [smolBSD](https://github.com/NetBSDfr/smolBSD). Minimal NetBSD microVM framework. Boot a full BSD in 20ms.
+- **[Justine Tunney](https://justine.lol/)** -- [Cosmopolitan Libc](https://justine.lol/cosmopolitan/) and the APE format. The idea that a single binary can run on four operating systems, for real, without emulation.
+- **[Fabrice Bellard](https://bellard.org/)** -- [TinyCC](https://bellard.org/tcc/). A complete C compiler small enough to embed as a library. This is what makes runtime plugin compilation possible.
+- **[Thomas Pornin](https://www.bearssl.org/)** -- [BearSSL](https://bearssl.org/). A TLS implementation designed for embedded systems: small, no-allocation, constant-time crypto. It's why a sub-1MB binary can talk HTTPS.
+- **[Dave Gamble](https://github.com/DaveGamble/cJSON)** -- [cJSON](https://github.com/DaveGamble/cJSON). Single-file JSON parser. Simple, reliable, handles everything the LLM APIs throw at it.
+- **[iMil](https://x.com/iMilnb)** -- [smolBSD](https://github.com/NetBSDfr/smolBSD). Minimal NetBSD microVM framework. Boot a full BSD in 20ms.
 
 ## License
 
