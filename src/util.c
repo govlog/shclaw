@@ -7,7 +7,18 @@
 
 void uuid_short(char *out, int len) {
     unsigned char buf[16];
+    static const char hex[] = "0123456789abcdef";
     memset(buf, 0, sizeof(buf));
+
+    if (!out || len <= 0) {
+        if (out)
+            out[0] = '\0';
+        return;
+    }
+
+    if (len > 32)
+        len = 32;
+
     FILE *f = fopen("/dev/urandom", "r");
     if (f) {
         size_t rd = fread(buf, 1, sizeof(buf), f);
@@ -24,21 +35,10 @@ void uuid_short(char *out, int len) {
     }
 
 have_entropy:
-    for (int i = 0; i < len && i < 16; i++)
-        sprintf(out + i * 2, "%02x", buf[i]);
-    out[len * 2] = '\0';
-    /* Truncate to requested length (chars, not bytes) */
-    if (len < 16)
-        out[len] = '\0';
-    /* Actually, uuid_short(out, 5) should produce 5 hex chars = "a1b2c" */
-    /* Let's use len as number of output chars */
-    int n_bytes = (len + 1) / 2;
-    if (n_bytes > 16) n_bytes = 16;
-    char tmp[33];
-    for (int i = 0; i < n_bytes; i++)
-        sprintf(tmp + i * 2, "%02x", buf[i]);
-    tmp[n_bytes * 2] = '\0';
-    memcpy(out, tmp, len);
+    for (int i = 0; i < len; i++) {
+        unsigned char b = buf[i / 2];
+        out[i] = hex[(i & 1) ? (b & 0x0f) : (b >> 4)];
+    }
     out[len] = '\0';
 }
 

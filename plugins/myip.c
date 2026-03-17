@@ -14,7 +14,7 @@ const char *tc_execute(const char *input_json) {
     tc_memset(buf, 0, sizeof(buf));
     tc_memset(result, 0, sizeof(result));
 
-    int status = tc_http_get("https://ip.wtf", buf, sizeof(buf));
+    int status = tc_http_get("http://ip.wtf/", buf, sizeof(buf));
 
     if (status < 0) {
         tc_snprintf(result, sizeof(result), "Error: HTTP request failed (status %d)", status);

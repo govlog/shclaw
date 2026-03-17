@@ -455,10 +455,12 @@ struct agent_ctx {
 
 int  agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
                        const char *trig_data, const char *thread_id,
-                       const char **all_agents, int n_agents);
+                       const char **all_agents, const char **all_specialties,
+                       int n_agents);
 void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
                                const char *trig_data, const char *thread_id,
-                               const char **all_agents, int n_agents,
+                               const char **all_agents,
+                               const char **all_specialties, int n_agents,
                                char *out, size_t out_sz);
 
 /* ── Daemon ─────────────────────────────────────────────── */

@@ -260,6 +260,7 @@ typedef struct {
     char trig_data[TC_BUF_LG];
     char thread_id[12];
     const char **all_agents;
+    const char **all_specialties;
     int n_agents;
     session_store_t *sessions;
 } session_worker_t;
@@ -269,7 +270,8 @@ static void *session_worker(void *arg) {
 
     pthread_mutex_lock(&w->agent->session_lock);
     int outcome = agent_run_session(w->agent, w->trig_type, w->trig_data,
-                                     w->thread_id, w->all_agents, w->n_agents);
+                                     w->thread_id, w->all_agents,
+                                     w->all_specialties, w->n_agents);
     w->agent->last_session_time = now_ms() / 1000;
 
     if (outcome == SESSION_COMPLETED && w->thread_id[0])
@@ -294,11 +296,15 @@ static void dispatch_session(daemon_t *d, agent_ctx_t *agent,
     snprintf(w->thread_id, 12, "%s", thread_id ? thread_id : "");
     w->sessions = &d->sessions;
 
-    /* Build agent name list */
+    /* Build agent name + specialty lists */
     static const char *agent_names[TC_MAX_AGENTS];
-    for (int i = 0; i < d->n_agents; i++)
+    static const char *agent_specs[TC_MAX_AGENTS];
+    for (int i = 0; i < d->n_agents; i++) {
         agent_names[i] = d->agents[i].name;
+        agent_specs[i] = d->agents[i].specialty;
+    }
     w->all_agents = agent_names;
+    w->all_specialties = agent_specs;
     w->n_agents = d->n_agents;
 
     pthread_t tid;
@@ -394,8 +400,10 @@ void daemon_run(daemon_t *d, ini_t *cfg) {
 
     /* Populate IRC agent names */
     d->irc.n_agents = d->n_agents;
-    for (int i = 0; i < d->n_agents; i++)
-        snprintf(d->irc.agents[i], 32, "%s", d->agents[i].name);
+    for (int i = 0; i < d->n_agents; i++) {
+        memcpy(d->irc.agents[i], d->agents[i].name, sizeof(d->irc.agents[i]));
+        d->irc.agents[i][sizeof(d->irc.agents[i]) - 1] = '\0';
+    }
 
     /* Generate IRC secret + connect */
     generate_irc_secret(d);

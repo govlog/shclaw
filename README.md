@@ -73,7 +73,7 @@ The event loop is a single `poll()` call watching the IRC socket and the Unix do
 Each agent is defined by an INI file in `etc/agents/`. Two flags control special behavior:
 
 - **`hub = true`** -- This agent is the default recipient. Any IRC message that doesn't start with an `@mention` gets routed to the hub. There should be exactly one hub agent -- it's the "front desk" that handles general conversation and decides when to delegate to specialists via `send_message`. The hub doesn't need a big model -- something like `qwen3.5:9b` via Ollama or `gpt-4.1-nano` works well for routing and casual conversation.
-- **`builder = true`** -- This agent gets access to the `create_plugin` tool. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this -- it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). Strong models still work best here, but smaller models become much more reliable if they first read [`include/tc_plugin.h`](include/tc_plugin.h) and [`plugins/_template.c`](plugins/_template.c), then call `create_plugin` with a short `test_input_json` and retry from compiler or self-test errors. Use the `builder.ini.example` template for that retrieval-first workflow.
+- **`builder = true`** -- This agent gets access to the `create_plugin` tool and only sees 4 tools (`read_file`, `exec`, `create_plugin`, `send_message`) to keep its context focused. It can write C source code and have the daemon compile it into a live tool via TCC. You don't want every agent to have this -- it's powerful and dangerous, so you give it to one dedicated agent with a carefully crafted system prompt that knows the plugin API constraints (`-nostdlib`, `tc_plugin.h` only, no libc). The plugin template ([`plugins/_template.c`](plugins/_template.c)) is pre-injected into the builder's system prompt, so even small models don't waste turns reading files. If the builder outputs code as text instead of calling `create_plugin`, the daemon auto-extracts and compiles it. This makes even small local models like `qwen3.5:9b` (via Ollama) capable of creating working plugins on the first try. Use `builder.ini.example` for the recommended workflow.
 
 A typical setup: a hub agent (general-purpose, cheap/local model), a research agent (analysis, standard model), and a builder agent (plugin creation, capable model). They coordinate via `send_message` -- file-based inboxes in `data/messages/<agent>/`, polled every 5 seconds by the daemon.
 
@@ -289,7 +289,7 @@ Agents have 16 built-in tools:
 | `get_fact` | Retrieve a fact |
 | `send_message` | Message another agent, the owner (via IRC), or broadcast |
 | `list_agents` | List running agents |
-| `create_plugin` | Write C source + compile via TCC, with optional self-test input/output checks (builder agents only) |
+| `create_plugin` | Write C source + compile via TCC (builder agents only) |
 | `clear_memory` | Clear an agent's memories and/or facts (target one agent or all) |
 
 Plugins written by agents become tools available to all agents immediately.
@@ -328,7 +328,7 @@ Available functions (injected by the daemon at compile time):
 | Category | Functions |
 |----------|-----------|
 | Memory | `tc_malloc`, `tc_free` |
-| Strings | `tc_strlen`, `tc_strcmp`, `tc_strncmp`, `tc_strcpy`, `tc_strncpy`, `tc_snprintf`, `tc_memcpy`, `tc_memset` |
+| Strings | `tc_strlen`, `tc_strcmp`, `tc_strncmp`, `tc_strcpy`, `tc_strncpy`, `tc_snprintf`, `tc_memcpy`, `tc_memset`, `tc_strstr`, `tc_strchr`, `tc_atoi` |
 | Files | `tc_read_file`, `tc_write_file` |
 | HTTP | `tc_http_get`, `tc_http_post`, `tc_http_post_json`, `tc_http_header` |
 | JSON | `tc_json_parse`, `tc_json_free`, `tc_json_print`, `tc_json_get`, `tc_json_index`, `tc_json_array_size`, `tc_json_string`, `tc_json_int`, `tc_json_double` |

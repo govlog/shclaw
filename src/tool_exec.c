@@ -6,6 +6,11 @@
 
 const char *tool_exec_cmd(const char *cmd, int timeout,
                           char *out, size_t out_sz) {
+    if (!out || out_sz == 0)
+        return "";
+
+    out[0] = '\0';
+
     if (!cmd || !cmd[0]) {
         snprintf(out, out_sz, "Error: empty command");
         return out;
@@ -41,7 +46,7 @@ const char *tool_exec_cmd(const char *cmd, int timeout,
     close(pipefd[1]);
 
     size_t total = 0;
-    size_t max_capture = out_sz - 128; /* Leave room for status suffix */
+    size_t max_capture = (out_sz > 128) ? out_sz - 128 : out_sz - 1;
     if (max_capture > (size_t)TC_TOOL_OUTPUT_MAX)
         max_capture = TC_TOOL_OUTPUT_MAX;
 

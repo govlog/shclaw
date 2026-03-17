@@ -65,6 +65,27 @@ void ssl_client_init_minimal(void *sc_ptr, void *xc_ptr,
 static __thread struct { char name[128]; char value[512]; } extra_hdrs[MAX_EXTRA_HDRS];
 static __thread int n_extra_hdrs = 0;
 
+static int request_append(char *buf, size_t buf_sz, size_t *off,
+                          const char *fmt, ...) {
+    va_list ap;
+    int n;
+
+    if (*off >= buf_sz)
+        return -1;
+
+    va_start(ap, fmt);
+    n = vsnprintf(buf + *off, buf_sz - *off, fmt, ap);
+    va_end(ap);
+
+    if (n < 0 || (size_t)n >= buf_sz - *off) {
+        *off = buf_sz;
+        return -1;
+    }
+
+    *off += (size_t)n;
+    return 0;
+}
+
 void http_set_header(const char *name, const char *value) {
     if (!name || !name[0]) { n_extra_hdrs = 0; return; }
     if (n_extra_hdrs >= MAX_EXTRA_HDRS) return;
@@ -131,6 +152,13 @@ static int write_all_fd(int fd, const void *buf, size_t len) {
 
 /* Parse URL → host, port, path, is_https */
 static int parse_url(const char *url, char *host, int *port, char *path, int *is_https) {
+    const char *slash;
+    const char *colon;
+    size_t hlen;
+
+    if (!url || !host || !port || !path || !is_https)
+        return -1;
+
     *is_https = 0;
     *port = 80;
 
@@ -142,29 +170,69 @@ static int parse_url(const char *url, char *host, int *port, char *path, int *is
         url += 7;
     }
 
-    const char *slash = strchr(url, '/');
-    const char *colon = strchr(url, ':');
+    if (!url[0])
+        return -1;
+
+    slash = strchr(url, '/');
+
+    if (url[0] == '[') {
+        const char *end = strchr(url + 1, ']');
+        if (!end)
+            return -1;
+
+        hlen = (size_t)(end - (url + 1));
+        if (hlen == 0 || hlen >= 256)
+            return -1;
+
+        memcpy(host, url + 1, hlen);
+        host[hlen] = '\0';
+
+        if (end[1] == ':')
+            *port = atoi(end + 2);
+        else if (end[1] != '\0' && end[1] != '/')
+            return -1;
+
+        if (slash) {
+            if (slash <= end)
+                return -1;
+            if (snprintf(path, 2048, "%s", slash) >= 2048)
+                return -1;
+        } else {
+            memcpy(path, "/", 2);
+        }
+        return 0;
+    }
+
+    colon = strchr(url, ':');
 
     if (colon && (!slash || colon < slash)) {
-        int hlen = (int)(colon - url);
+        hlen = (size_t)(colon - url);
+        if (hlen == 0 || hlen >= 256)
+            return -1;
         memcpy(host, url, hlen);
         host[hlen] = '\0';
         *port = atoi(colon + 1);
-        if (slash)
-            snprintf(path, 2048, "%s", slash);
-        else
-            strcpy(path, "/");
+        if (slash) {
+            if (snprintf(path, 2048, "%s", slash) >= 2048)
+                return -1;
+        } else {
+            memcpy(path, "/", 2);
+        }
     } else if (slash) {
-        int hlen = (int)(slash - url);
+        hlen = (size_t)(slash - url);
+        if (hlen == 0 || hlen >= 256)
+            return -1;
         memcpy(host, url, hlen);
         host[hlen] = '\0';
-        snprintf(path, 2048, "%s", slash);
+        if (snprintf(path, 2048, "%s", slash) >= 2048)
+            return -1;
     } else {
-        snprintf(host, 256, "%s", url);
-        strcpy(path, "/");
+        if (snprintf(host, 256, "%s", url) >= 256)
+            return -1;
+        memcpy(path, "/", 2);
     }
 
-    return 0;
+    return host[0] ? 0 : -1;
 }
 
 static http_response_t do_request(const char *method, const char *url,
@@ -174,10 +242,15 @@ static http_response_t do_request(const char *method, const char *url,
     char host[256], path[2048];
     int port, is_https;
 
-    parse_url(url, host, &port, path, &is_https);
+    if (parse_url(url, host, &port, path, &is_https) != 0) {
+        n_extra_hdrs = 0;
+        resp.status = -4;
+        return resp;
+    }
 
     int fd = tcp_connect(host, port);
     if (fd < 0) {
+        n_extra_hdrs = 0;
         resp.status = -1;
         return resp;
     }
@@ -194,6 +267,7 @@ static http_response_t do_request(const char *method, const char *url,
         br_x509_trust_anchor *anchors = ca_get_anchors(&anchor_count);
 
         if (!anchors || anchor_count == 0) {
+            n_extra_hdrs = 0;
             close(fd);
             resp.status = -2;
             return resp;
@@ -207,26 +281,33 @@ static http_response_t do_request(const char *method, const char *url,
 
     /* Build HTTP request */
     char request[TC_BUF_LG];
-    int rlen = snprintf(request, sizeof(request),
+    size_t rlen = 0;
+    int req_err = request_append(request, sizeof(request), &rlen,
         "%s %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Connection: close\r\n",
         method, path, host);
 
     if (content_type && body_len > 0) {
-        rlen += snprintf(request + rlen, sizeof(request) - rlen,
+        req_err |= request_append(request, sizeof(request), &rlen,
             "Content-Type: %s\r\n"
             "Content-Length: %zu\r\n",
             content_type, body_len);
     }
 
     for (int h = 0; h < n_extra_hdrs; h++) {
-        rlen += snprintf(request + rlen, sizeof(request) - rlen,
+        req_err |= request_append(request, sizeof(request), &rlen,
             "%s: %s\r\n", extra_hdrs[h].name, extra_hdrs[h].value);
     }
     n_extra_hdrs = 0;
 
-    rlen += snprintf(request + rlen, sizeof(request) - rlen, "\r\n");
+    req_err |= request_append(request, sizeof(request), &rlen, "\r\n");
+
+    if (req_err != 0) {
+        close(fd);
+        resp.status = -4;
+        return resp;
+    }
 
     /* Send request */
     if (use_tls) {
@@ -247,13 +328,29 @@ static http_response_t do_request(const char *method, const char *url,
     size_t buf_cap = 65536;
     size_t buf_max = 4 * 1024 * 1024; /* 4MB max */
     char *buf = malloc(buf_cap);
+    if (!buf) {
+        close(fd);
+        resp.status = -5;
+        return resp;
+    }
     size_t total = 0;
 
     while (total < buf_max) {
         if (total + 8192 > buf_cap) {
-            buf_cap *= 2;
-            if (buf_cap > buf_max) buf_cap = buf_max;
-            buf = realloc(buf, buf_cap);
+            size_t new_cap = buf_cap * 2;
+            char *tmp;
+            if (new_cap > buf_max) new_cap = buf_max;
+            tmp = realloc(buf, new_cap);
+            if (!tmp) {
+                if (use_tls)
+                    br_ssl_engine_close(&sc.eng);
+                close(fd);
+                free(buf);
+                resp.status = -5;
+                return resp;
+            }
+            buf = tmp;
+            buf_cap = new_cap;
         }
         int n;
         if (use_tls)
@@ -316,6 +413,11 @@ static http_response_t do_request(const char *method, const char *url,
     if (is_chunked) {
         /* Decode chunked body */
         resp.body = malloc(raw_len + 1);
+        if (!resp.body) {
+            resp.status = -5;
+            free(buf);
+            return resp;
+        }
         resp.body_len = 0;
         char *p = body_start;
         char *end = body_start + raw_len;
@@ -338,6 +440,11 @@ static http_response_t do_request(const char *method, const char *url,
     } else {
         resp.body_len = raw_len;
         resp.body = malloc(resp.body_len + 1);
+        if (!resp.body) {
+            resp.status = -5;
+            free(buf);
+            return resp;
+        }
         memcpy(resp.body, body_start, resp.body_len);
         resp.body[resp.body_len] = '\0';
     }

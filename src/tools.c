@@ -139,15 +139,10 @@ static const tool_def_t TOOLS[] = {
         .desc = "Create a single-file C plugin. Source must include only "
                 "\"tc_plugin.h\" and export TC_PLUGIN_NAME, TC_PLUGIN_DESC, "
                 "TC_PLUGIN_SCHEMA, and tc_execute(const char *input_json). "
-                "Read include/tc_plugin.h or plugins/_template.c first if "
-                "needed. You can pass test_input_json and expected_output "
-                "to self-test the plugin immediately. Compilation and "
-                "self-test errors are returned for retry.",
+                "Compilation errors are returned for retry.",
         .params = {
             {"name",        TC_STRING, "Plugin name (e.g. 'weather')", 1},
             {"code",        TC_STRING, "Complete C source code", 1},
-            {"test_input_json", TC_STRING, "Optional JSON object string for an immediate self-test", 0},
-            {"expected_output", TC_STRING, "Optional exact expected output for the self-test", 0},
             {0}
         }
     },
@@ -185,6 +180,11 @@ cJSON *tools_to_json(int is_builder) {
             if (!is_builder) continue;
 #endif
         }
+
+        /* Builder agents: only essential tools */
+        if (is_builder && i != TOOL_READ_FILE && i != TOOL_EXEC &&
+            i != TOOL_CREATE_PLUGIN && i != TOOL_SEND_MESSAGE)
+            continue;
 
         const tool_def_t *t = &TOOLS[i];
         if (!t->name) continue;
@@ -240,16 +240,6 @@ static int j_bool(cJSON *input, const char *key, int def) {
     return def;
 }
 
-static int tool_is_empty_output(const char *result) {
-    return !result || !result[0] || strcmp(result, TC_EMPTY_OUTPUT_MARKER) == 0;
-}
-
-static int tool_is_error_output(const char *result) {
-    return result &&
-           (strncmp(result, "error:", 6) == 0 ||
-            strncmp(result, "Error:", 6) == 0 ||
-            strncmp(result, "Plugin returned", 15) == 0);
-}
 
 const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
                          char *out, size_t out_sz) {
@@ -471,8 +461,6 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
     case TOOL_CREATE_PLUGIN: {
         const char *name = j_str(input, "name");
         const char *code = j_str(input, "code");
-        const char *test_input_json = j_str(input, "test_input_json");
-        const char *expected_output = j_str(input, "expected_output");
         if (!name || !code) { snprintf(out, out_sz, "Error: name and code required"); return out; }
 
         /* Write source */
@@ -498,62 +486,6 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
                          "TC_PLUGIN_NAME, TC_PLUGIN_DESC, TC_PLUGIN_SCHEMA, "
                          "and tc_execute(const char *input_json).",
                          name);
-            return out;
-        }
-
-        if (test_input_json && test_input_json[0]) {
-            cJSON *test_input = cJSON_Parse(test_input_json);
-            char test_result[TC_BUF_XL];
-            const char *result;
-
-            if (!test_input || !cJSON_IsObject(test_input)) {
-                cJSON_Delete(test_input);
-                snprintf(out, out_sz,
-                         "Plugin '%s' compiled and loaded, but self-test "
-                         "input is invalid JSON object: %s",
-                         name, test_input_json);
-                return out;
-            }
-
-            result = plugin_execute(ctx->plugins, name, test_input,
-                                    test_result, sizeof(test_result));
-            cJSON_Delete(test_input);
-
-            if (!result) {
-                snprintf(out, out_sz,
-                         "Plugin '%s' compiled and loaded, but self-test "
-                         "execution failed.", name);
-                return out;
-            }
-
-            if (tool_is_empty_output(result)) {
-                snprintf(out, out_sz,
-                         "Plugin '%s' compiled, but self-test failed: "
-                         "tool returned %s for input %s",
-                         name, TC_EMPTY_OUTPUT_MARKER, test_input_json);
-                return out;
-            }
-
-            if (expected_output && strcmp(result, expected_output) != 0) {
-                snprintf(out, out_sz,
-                         "Plugin '%s' compiled, but self-test failed.\n"
-                         "Input: %s\nExpected: %s\nActual: %s",
-                         name, test_input_json, expected_output, result);
-                return out;
-            }
-
-            if (!expected_output && tool_is_error_output(result)) {
-                snprintf(out, out_sz,
-                         "Plugin '%s' compiled, but self-test failed.\n"
-                         "Input: %s\nActual: %s",
-                         name, test_input_json, result);
-                return out;
-            }
-
-            snprintf(out, out_sz,
-                     "Plugin '%s' compiled, loaded, and self-test passed.\n"
-                     "Input: %s\nOutput: %s",
-                     name, test_input_json, result);
             return out;
         }
 

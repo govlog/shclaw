@@ -97,6 +97,7 @@ static void tcc_error_handler(void *opaque, const char *msg) {
 /* ── Plugin-facing wrappers for libc primitives ── */
 
 static int tc_plugin_strlen(const char *s) { return (int)strlen(s); }
+static int tc_plugin_atoi(const char *s) { return atoi(s); }
 
 static int tc_plugin_read_file(const char *path, char *buf, size_t buf_sz) {
     int fd = open(path, O_RDONLY);
@@ -176,6 +177,9 @@ int plugin_compile(plugin_registry_t *r, const char *src_path, time_t mtime) {
     tcc_add_symbol(tcc, "tc_strcpy",          strcpy);
     tcc_add_symbol(tcc, "tc_strncpy",         strncpy);
     tcc_add_symbol(tcc, "tc_snprintf",        snprintf);
+    tcc_add_symbol(tcc, "tc_strstr",         strstr);
+    tcc_add_symbol(tcc, "tc_strchr",         strchr);
+    tcc_add_symbol(tcc, "tc_atoi",           tc_plugin_atoi);
 
     /* Syscall helpers */
     tcc_add_symbol(tcc, "tc_read_file",       tc_plugin_read_file);

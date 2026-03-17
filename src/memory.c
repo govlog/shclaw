@@ -130,17 +130,38 @@ const char *memory_add(memory_t *m, const char *content, const char *category,
 
     /* Append to JSONL file */
     char *json_line = cJSON_PrintUnformatted(entry);
-    if (json_line) {
-        FILE *f = fopen(memory_log_path(m), "a");
-        if (f) {
-            fprintf(f, "%s\n", json_line);
-            fclose(f);
-        }
-        free(json_line);
+    if (!json_line) {
+        pthread_mutex_unlock(&m->lock);
+        cJSON_Delete(entry);
+        snprintf(out, out_sz, "Error: cannot serialize memory entry");
+        return out;
     }
 
-    /* Add to cache */
-    cJSON_AddItemToArray(m->cache, cJSON_Duplicate(entry, 1));
+    int wrote = 0;
+    FILE *f = fopen(memory_log_path(m), "a");
+    if (f) {
+        int err = 0;
+        if (fputs(json_line, f) == EOF || fputc('\n', f) == EOF)
+            err = 1;
+        if (fclose(f) != 0)
+            err = 1;
+        if (!err)
+            wrote = 1;
+    }
+    free(json_line);
+
+    if (!wrote) {
+        pthread_mutex_unlock(&m->lock);
+        cJSON_Delete(entry);
+        snprintf(out, out_sz, "Error: cannot append memory log");
+        return out;
+    }
+
+    {
+        /* Add to cache only after the append succeeded. */
+        cJSON_AddItemToArray(m->cache, cJSON_Duplicate(entry, 1));
+    }
+
     pthread_mutex_unlock(&m->lock);
 
     snprintf(out, out_sz, "Remembered (id=%s): %.80s", mid, content);

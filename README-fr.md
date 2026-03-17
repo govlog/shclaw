@@ -73,7 +73,7 @@ La boucle d'événements est un seul appel `poll()` qui surveille le socket IRC 
 Chaque agent est défini par un fichier INI dans `etc/agents/`. Deux flags contrôlent des comportements spéciaux :
 
 - **`hub = true`** -- Cet agent est le destinataire par défaut. Tout message IRC qui ne commence pas par un `@mention` est routé vers le hub. Il ne doit y en avoir qu'un -- c'est "l'accueil" qui gère la conversation générale et décide quand déléguer aux spécialistes via `send_message`. Le hub n'a pas besoin d'un gros modèle -- un truc comme `qwen3.5:9b` via Ollama ou `gpt-4.1-nano` marche bien pour le routage et la conversation courante.
-- **`builder = true`** -- Cet agent a accès à l'outil `create_plugin`. Il peut écrire du code source C et le faire compiler par le daemon en outil live via TCC. On ne veut pas que tous les agents aient ça -- c'est puissant et dangereux, donc on le donne à un agent dédié avec un prompt système qui connaît les contraintes de l'API plugin (`-nostdlib`, `tc_plugin.h` uniquement, pas de libc). Les gros modèles restent meilleurs ici, mais les petits modèles deviennent beaucoup plus fiables s'ils lisent d'abord [`include/tc_plugin.h`](include/tc_plugin.h) et [`plugins/_template.c`](plugins/_template.c), puis appellent `create_plugin` avec un petit `test_input_json` et corrigent le code à partir des erreurs de compilation ou d'auto-test. Utilisez le template `builder.ini.example` pour ce workflow orienté récupération locale.
+- **`builder = true`** -- Cet agent a accès à l'outil `create_plugin` et ne voit que 4 outils (`read_file`, `exec`, `create_plugin`, `send_message`) pour garder son contexte concentré. Il peut écrire du code source C et le faire compiler par le daemon en outil live via TCC. On ne veut pas que tous les agents aient ça -- c'est puissant et dangereux, donc on le donne à un agent dédié avec un prompt système qui connaît les contraintes de l'API plugin (`-nostdlib`, `tc_plugin.h` uniquement, pas de libc). Le template plugin ([`plugins/_template.c`](plugins/_template.c)) est pré-injecté dans le prompt système du builder, pour que même les petits modèles ne perdent pas de tours à lire des fichiers. Si le builder produit du code en texte au lieu d'appeler `create_plugin`, le daemon l'extrait et le compile automatiquement. Du coup même des petits modèles locaux comme `qwen3.5:9b` (via Ollama) arrivent à créer des plugins fonctionnels du premier coup. Utilisez `builder.ini.example` pour le workflow recommandé.
 
 Un setup typique : un agent hub (généraliste, modèle pas cher/local), un agent recherche (analyse, modèle standard), et un agent builder (création de plugins, modèle costaud). Ils se coordonnent via `send_message` -- des boîtes aux lettres fichier dans `data/messages/<agent>/`, consultées toutes les 5 secondes par le daemon.
 
@@ -289,7 +289,7 @@ Les agents disposent de 16 outils intégrés :
 | `get_fact` | Récupérer un fait |
 | `send_message` | Envoyer un message à un autre agent, au propriétaire (via IRC), ou en broadcast |
 | `list_agents` | Lister les agents actifs |
-| `create_plugin` | Écrire du C + compiler via TCC, avec auto-test optionnel via entrée/sortie attendue (agents builder uniquement) |
+| `create_plugin` | Écrire du C + compiler via TCC (agents builder uniquement) |
 | `clear_memory` | Effacer les souvenirs et/ou faits d'un agent (un agent ou tous) |
 
 Les plugins écrits par les agents deviennent des outils disponibles pour tous les agents immédiatement.
@@ -328,7 +328,7 @@ Fonctions disponibles (injectées par le daemon à la compilation) :
 | Catégorie | Fonctions |
 |-----------|-----------|
 | Mémoire | `tc_malloc`, `tc_free` |
-| Chaînes | `tc_strlen`, `tc_strcmp`, `tc_strncmp`, `tc_strcpy`, `tc_strncpy`, `tc_snprintf`, `tc_memcpy`, `tc_memset` |
+| Chaînes | `tc_strlen`, `tc_strcmp`, `tc_strncmp`, `tc_strcpy`, `tc_strncpy`, `tc_snprintf`, `tc_memcpy`, `tc_memset`, `tc_strstr`, `tc_strchr`, `tc_atoi` |
 | Fichiers | `tc_read_file`, `tc_write_file` |
 | HTTP | `tc_http_get`, `tc_http_post`, `tc_http_post_json`, `tc_http_header` |
 | JSON | `tc_json_parse`, `tc_json_free`, `tc_json_print`, `tc_json_get`, `tc_json_index`, `tc_json_array_size`, `tc_json_string`, `tc_json_int`, `tc_json_double` |

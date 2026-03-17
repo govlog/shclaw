@@ -5,6 +5,7 @@ name       = jarvis
 model      = simple
 hub        = true
 max_turns  = 30
+specialty  = hub agent, coordinates and delegates to other agents
 
 personality = You are Jarvis, a helpful and efficient personal assistant. \
 You coordinate other agents when useful, otherwise you handle things yourself. \

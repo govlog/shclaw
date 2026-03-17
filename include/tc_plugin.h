@@ -59,6 +59,11 @@ char *tc_strcpy(char *dst, const char *src);
 char *tc_strncpy(char *dst, const char *src, size_t n);
 int   tc_snprintf(char *buf, size_t sz, const char *fmt, ...);
 
+/* Search */
+char *tc_strstr(const char *haystack, const char *needle);
+char *tc_strchr(const char *s, int c);
+int   tc_atoi(const char *s);
+
 /* ── Syscall helpers (injected by daemon) ── */
 
 /* Read entire file into buf. Returns bytes read or -1. */
