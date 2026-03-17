@@ -33,9 +33,11 @@
 
 ## What is this
 
-A multi-agent AI orchestrator in C. One static binary under 1MB. It talks to LLMs (Claude, GPT, Ollama), lives on IRC, schedules its own tasks, remembers things across sessions, and embeds a C compiler so agents can write and compile their own plugins at runtime.
+A multi-agent AI orchestrator in C. One static binary under 1MB. It talks to LLMs (Claude, GPT, Ollama), lives on IRC, schedules its own tasks, and remembers things across sessions.
 
-Runs on Linux, FreeBSD, NetBSD, and OpenBSD from the same binary.
+The binary is polyglot: built with [Cosmopolitan Libc](https://justine.lol/cosmopolitan/), it produces a single ELF that runs unmodified on Linux, FreeBSD, NetBSD, and OpenBSD. Same file, four kernels, no emulation -- the libc abstracts away syscall differences at compile time.
+
+It also embeds [TinyCC](https://bellard.org/tcc/) (Fabrice Bellard's C compiler) as a library. When an agent wants a new tool, it writes C source code. The daemon compiles it in-memory with `tcc_compile_string()`, relocates it into the process address space with `tcc_relocate()`, and resolves the entry point with `tcc_get_symbol()`. No `.so` ever touches disk -- the compiled code is live and callable immediately. Plugins are sandboxed: no libc access, only a curated set of functions (HTTP+TLS, JSON, file I/O) injected by the daemon before compilation. This means the binary is simultaneously an AI orchestrator, an IRC client, a TLS stack, and a C compiler -- all in under 1MB.
 
 > **Fair warning.** Shclaw gives AI agents access to shell commands, file I/O, and network calls. One of them can write and compile C at runtime. Run it somewhere you don't care about -- a VM, a container, a Pi on a VLAN.
 

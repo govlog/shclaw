@@ -33,9 +33,11 @@
 
 ## C'est quoi ce truc
 
-Un orchestrateur multi-agents IA en C. Un seul binaire statique de moins de 1Mo. Il parle aux LLMs (Claude, GPT, Ollama), vit sur IRC, planifie ses propres tâches, se souvient de trucs entre les sessions, et embarque un compilateur C pour que les agents puissent écrire et compiler leurs propres plugins à la volée.
+Un orchestrateur multi-agents IA en C. Un seul binaire statique de moins de 1Mo. Il parle aux LLMs (Claude, GPT, Ollama), vit sur IRC, planifie ses propres tâches, et se souvient de trucs entre les sessions.
 
-Tourne sur Linux, FreeBSD, NetBSD et OpenBSD à partir du même binaire.
+Le binaire est polyglotte : compilé avec [Cosmopolitan Libc](https://justine.lol/cosmopolitan/), il produit un seul ELF qui tourne tel quel sur Linux, FreeBSD, NetBSD et OpenBSD. Même fichier, quatre noyaux, pas d'émulation -- la libc abstrait les différences de syscalls à la compilation.
+
+Il embarque aussi [TinyCC](https://bellard.org/tcc/) (le compilateur C de Fabrice Bellard) comme bibliothèque. Quand un agent veut un nouvel outil, il écrit du code source C. Le daemon le compile en mémoire avec `tcc_compile_string()`, le reloge dans l'espace d'adressage du processus avec `tcc_relocate()`, et résout le point d'entrée avec `tcc_get_symbol()`. Aucun `.so` ne touche jamais le disque -- le code compilé est immédiatement vivant et appelable. Les plugins sont sandboxés : pas d'accès libc, seulement un ensemble de fonctions sélectionnées (HTTP+TLS, JSON, I/O fichier) injectées par le daemon avant la compilation. Le binaire est donc à la fois un orchestrateur IA, un client IRC, une stack TLS, et un compilateur C -- le tout en moins de 1Mo.
 
 > **Attention.** Shclaw donne à des agents IA l'accès à des commandes shell, à l'écriture de fichiers et à des appels réseau. L'un d'entre eux peut écrire et compiler du C à la volée. Faites-le tourner sur un truc dont vous vous fichez -- une VM, un conteneur, un Pi sur un VLAN.
 
