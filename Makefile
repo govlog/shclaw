@@ -200,6 +200,7 @@ cosmo: $(COSMO_BIN)
 
 $(COSMO_BIN): $(COSMO_OBJS) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/libtcc.a.cosmo
 	$(COSMO_CC) $(COSMO_CFLAGS) $(COSMO_LDFLAGS) -o $@ $(COSMO_OBJS) $(COSMO_LIBS)
+	@rm -f $@.bak
 	$(COSMO_DIR)/bin/assimilate $@
 	@echo "==> Built $(COSMO_BIN) ($$(du -h $(COSMO_BIN) | cut -f1))"
 	@echo "    Runs on: Linux, NetBSD, FreeBSD, OpenBSD (x86_64)"
@@ -289,9 +290,11 @@ smolbsd: $(COSMO_BIN) $(SMOLBSD_DIR)/Makefile
 		echo "Create an instance directory first (make install or manually)"; \
 		exit 1; \
 	fi
+	rm -f $(SMOLBSD_DIR)/shclaw.com $(SMOLBSD_DIR)/images/shclaw-amd64.img
+	rm -rf $(SMOLBSD_DIR)/service/shclaw
 	cp $(COSMO_BIN) $(SMOLBSD_DIR)/shclaw.com
 	cp smolbsd/Dockerfile $(SMOLBSD_DIR)/dockerfiles/Dockerfile.shclaw
-	cd $(SMOLBSD_DIR) && echo "" | ./docker2svc.sh dockerfiles/Dockerfile.shclaw
+	cd $(SMOLBSD_DIR) && ./smoler.sh build dockerfiles/Dockerfile.shclaw
 	@echo ""
 	@echo "smolBSD image built: $(SMOLBSD_DIR)/images/shclaw-amd64.img"
 	@echo ""
@@ -303,7 +306,7 @@ smolbsd: $(COSMO_BIN) $(SMOLBSD_DIR)/Makefile
 # Clean everything
 # -------------------------------------------------------------------
 clean:
-	rm -rf build build-cosmo $(MUSL_BIN) $(COSMO_BIN) $(COSMO_BIN).dbg
+	rm -rf build build-cosmo $(MUSL_BIN) $(COSMO_BIN) $(COSMO_BIN).dbg $(COSMO_BIN).bak
 	rm -f docker/$(MUSL_BIN)
 	rm -f $(SMOLBSD_DIR)/shclaw.com $(SMOLBSD_DIR)/dockerfiles/Dockerfile.shclaw
 	rm -rf $(SMOLBSD_DIR)/service/shclaw $(SMOLBSD_DIR)/etc/shclaw.conf
