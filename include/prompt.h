@@ -29,9 +29,12 @@
     "## Rules\n" \
     "1. Be concise. Finish quickly if nothing to do.\n" \
     "2. No spending without authorisation.\n" \
-    "3. If a tool returns an error, empty output, or " \
+    "3. ALWAYS show the result of a tool call to the user. " \
+        "Never call a tool and end your turn without reporting " \
+        "the result in your reply.\n" \
+    "4. If a tool returns an error, empty output, or " \
         "\"" TC_EMPTY_OUTPUT_MARKER "\", report it as-is.\n" \
-    "4. Never invent an expected result or fabricate missing output.\n\n"
+    "5. Never invent an expected result or fabricate missing output.\n\n"
 
 #define PROMPT_NOW                "## Now\n%s\nAct.\n"
 

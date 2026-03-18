@@ -351,25 +351,101 @@ const char *plugin_execute(plugin_registry_t *r, const char *name, cJSON *input,
         return out;
     }
 
+    const char *(*fn)(const char *) = NULL;
+
     pthread_mutex_lock(&r->lock);
     for (int i = 0; i < r->count; i++) {
         if (strcmp(r->plugins[i].name, name) == 0 && r->plugins[i].execute) {
-            const char *(*fn)(const char *) = r->plugins[i].execute;
-            const char *result = fn(input_json);
-            if (!result)
-                snprintf(out, out_sz, "Plugin returned NULL");
-            else if (!result[0])
-                snprintf(out, out_sz, "%s", TC_EMPTY_OUTPUT_MARKER);
-            else
-                snprintf(out, out_sz, "%s", result);
-            pthread_mutex_unlock(&r->lock);
-            free(input_json);
-            return out;
+            fn = r->plugins[i].execute;
+            break;
         }
     }
     pthread_mutex_unlock(&r->lock);
+
+    if (!fn) {
+        free(input_json);
+        return NULL;
+    }
+
+    /* Run plugin in a forked child to isolate crashes (segfault, abort, etc.).
+     * The child writes its result to a pipe; the parent reads it back. */
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        /* Pipe failed — fall back to direct call (unsafe but better than nothing) */
+        const char *result = fn(input_json);
+        if (!result)
+            snprintf(out, out_sz, "Plugin returned NULL");
+        else if (!result[0])
+            snprintf(out, out_sz, "%s", TC_EMPTY_OUTPUT_MARKER);
+        else
+            snprintf(out, out_sz, "%s", result);
+        free(input_json);
+        return out;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        const char *result = fn(input_json);
+        if (!result)
+            snprintf(out, out_sz, "Plugin returned NULL");
+        else if (!result[0])
+            snprintf(out, out_sz, "%s", TC_EMPTY_OUTPUT_MARKER);
+        else
+            snprintf(out, out_sz, "%s", result);
+        free(input_json);
+        return out;
+    }
+
+    if (pid == 0) {
+        /* Child: run plugin, write result to pipe, exit */
+        close(pipefd[0]);
+        const char *result = fn(input_json);
+        if (result && result[0]) {
+            size_t len = strlen(result);
+            if (len > out_sz - 1) len = out_sz - 1;
+            (void)write(pipefd[1], result, len);
+        }
+        close(pipefd[1]);
+        _exit(0);
+    }
+
+    /* Parent: read result from pipe, wait for child */
+    close(pipefd[1]);
     free(input_json);
-    return NULL;
+
+    size_t total = 0;
+    while (total < out_sz - 1) {
+        ssize_t n = read(pipefd[0], out + total, out_sz - 1 - total);
+        if (n <= 0) break;
+        total += (size_t)n;
+    }
+    close(pipefd[0]);
+    out[total] = '\0';
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        snprintf(out, out_sz,
+                 "Error: plugin '%s' crashed (signal %d: %s). "
+                 "Check the plugin code for bugs (bad pointers, buffer overflows, "
+                 "uninitialized static variables).",
+                 name, sig,
+                 sig == SIGSEGV ? "segfault" :
+                 sig == SIGABRT ? "abort" :
+                 sig == SIGFPE  ? "floating point exception" :
+                 sig == SIGBUS  ? "bus error" : "unknown");
+        log_error("plugin: '%s' crashed with signal %d", name, sig);
+        return out;
+    }
+
+    if (!out[0])
+        snprintf(out, out_sz, "%s", TC_EMPTY_OUTPUT_MARKER);
+
+    return out;
 }
 
 #endif /* TC_NO_PLUGINS */
