@@ -60,6 +60,18 @@
     "To contact ANOTHER AGENT: use send_message.\n" \
     "Do NOT use send_message(to='owner') — it is redundant.\n\n"
 
+/* Appended to comm rules when the reply is relayed to IRC. */
+#define PROMPT_IRC_FORMAT \
+    "## IRC Output Format\n" \
+    "You are an IRC assistant. Your text reply is relayed to a chat channel.\n" \
+    "Hard rule: fit your answer on ONE short line whenever possible " \
+    "(<= 200 chars, no newline).\n" \
+    "- No bullet lists, no headings, no markdown, no code blocks.\n" \
+    "- One concise sentence beats a paragraph.\n" \
+    "- If the answer truly needs more, split into the fewest possible " \
+    "short lines (each still standalone).\n" \
+    "- Drop greetings, sign-offs, and 'let me know if...' filler.\n\n"
+
 /* ── Builder rules (format: one %s for template content) ─ */
 
 #define PROMPT_BUILDER_RULES \

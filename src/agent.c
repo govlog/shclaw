@@ -279,8 +279,13 @@ void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
     }
     const char *builder_rules = builder_rules_buf;
 
-    const char *comm_rules = (trig_type == TRIG_AGENT_MSG)
+    const char *comm_base = (trig_type == TRIG_AGENT_MSG)
         ? PROMPT_COMM_AGENT_MSG : PROMPT_COMM_DIRECT;
+    int relay_to_irc = (trig_type == TRIG_IRC || trig_type == TRIG_SCHEDULE ||
+                        trig_type == TRIG_SOCKET);
+    char comm_rules[TC_BUF_LG];
+    snprintf(comm_rules, sizeof(comm_rules), "%s%s",
+             comm_base, relay_to_irc ? PROMPT_IRC_FORMAT : "");
 
     snprintf(out, out_sz, PROMPT_SYSTEM_FMT,
         agent->name, agent->personality, agent->system_prompt_extra,
