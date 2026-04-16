@@ -594,7 +594,7 @@ void daemon_run(daemon_t *d, ini_t *cfg) {
             cJSON *thread = session_create(&d->sessions,
                 triggers[i].type == TRIG_IRC ? "irc" : "internal",
                 title, "owner");
-            const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(thread, "id"));
+            const char *sid = j_str(thread, "id");
             char sid_copy[12] = "";
             if (sid) snprintf(sid_copy, sizeof(sid_copy), "%s", sid);
             cJSON_Delete(thread);
@@ -617,7 +617,7 @@ void daemon_run(daemon_t *d, ini_t *cfg) {
                     char *due_json = cJSON_PrintUnformatted(due);
                     cJSON *thread = session_create(&d->sessions, "schedule",
                                                     "Scheduled task", d->agents[i].name);
-                    const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(thread, "id"));
+                    const char *sid = j_str(thread, "id");
                     char sid_copy[12] = "";
                     if (sid) snprintf(sid_copy, sizeof(sid_copy), "%s", sid);
                     cJSON_Delete(thread);
@@ -628,7 +628,7 @@ void daemon_run(daemon_t *d, ini_t *cfg) {
                     cJSON *ids = cJSON_CreateArray();
                     cJSON *task;
                     cJSON_ArrayForEach(task, due) {
-                        const char *tid = cJSON_GetStringValue(cJSON_GetObjectItem(task, "id"));
+                        const char *tid = j_str(task, "id");
                         if (tid) cJSON_AddItemToArray(ids, cJSON_CreateString(tid));
                     }
                     sched_mark_done(&d->agents[i].scheduler, ids);
@@ -648,12 +648,12 @@ void daemon_run(daemon_t *d, ini_t *cfg) {
                 if (count > 0) {
                     char *msgs_json = cJSON_PrintUnformatted(msgs);
                     cJSON *first = cJSON_GetArrayItem(msgs, 0);
-                    const char *from = cJSON_GetStringValue(cJSON_GetObjectItem(first, "from"));
+                    const char *from = j_str(first, "from");
                     char title[128];
                     snprintf(title, sizeof(title), "From %s", from ? from : "?");
                     cJSON *thread = session_create(&d->sessions, "agent_message",
                                                     title, from ? from : "unknown");
-                    const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(thread, "id"));
+                    const char *sid = j_str(thread, "id");
                     char sid_copy[12] = "";
                     if (sid) snprintf(sid_copy, sizeof(sid_copy), "%s", sid);
                     cJSON_Delete(thread);

@@ -39,19 +39,11 @@ static char *index_file(session_store_t *s) {
 }
 
 static cJSON *load_index(session_store_t *s) {
-    char *data = file_slurp(index_file(s), NULL);
-    if (!data) return cJSON_CreateArray();
-    cJSON *arr = cJSON_Parse(data);
-    free(data);
-    return arr ? arr : cJSON_CreateArray();
+    return json_load_array(index_file(s));
 }
 
 static void save_index(session_store_t *s, cJSON *index) {
-    char *json = cJSON_PrintUnformatted(index);
-    if (json) {
-        atomic_write(index_file(s), json, strlen(json));
-        free(json);
-    }
+    json_save_atomic(index_file(s), index, 0);
 }
 
 static cJSON *load_session(session_store_t *s, const char *sid) {
@@ -63,13 +55,9 @@ static cJSON *load_session(session_store_t *s, const char *sid) {
 }
 
 static void save_session(session_store_t *s, cJSON *session) {
-    const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(session, "id"));
+    const char *sid = j_str(session, "id");
     if (!sid) return;
-    char *json = cJSON_PrintUnformatted(session);
-    if (json) {
-        atomic_write(session_file(s, sid), json, strlen(json));
-        free(json);
-    }
+    json_save_atomic(session_file(s, sid), session, 0);
 }
 
 void session_store_init(session_store_t *s, const char *dir) {
@@ -155,9 +143,10 @@ int session_add_message(session_store_t *s, const char *sid,
         /* Check if already in list */
         int found = 0;
         cJSON *item;
-        cJSON_ArrayForEach(item, agents)
-            if (cJSON_GetStringValue(item) && strcmp(cJSON_GetStringValue(item), names[n]) == 0)
-                { found = 1; break; }
+        cJSON_ArrayForEach(item, agents) {
+            const char *iv = cJSON_GetStringValue(item);
+            if (iv && strcmp(iv, names[n]) == 0) { found = 1; break; }
+        }
         if (!found)
             cJSON_AddItemToArray(agents, cJSON_CreateString(names[n]));
     }
@@ -168,9 +157,8 @@ int session_add_message(session_store_t *s, const char *sid,
     cJSON *idx = load_index(s);
     cJSON *entry;
     cJSON_ArrayForEach(entry, idx) {
-        cJSON *id_item = cJSON_GetObjectItem(entry, "id");
-        if (id_item && cJSON_GetStringValue(id_item) &&
-            strcmp(cJSON_GetStringValue(id_item), sid) == 0) {
+        const char *eid = j_str(entry, "id");
+        if (eid && strcmp(eid, sid) == 0) {
             cJSON_SetValuestring(cJSON_GetObjectItem(entry, "updated_at"), now);
             break;
         }
@@ -206,9 +194,8 @@ int session_set_status(session_store_t *s, const char *sid, session_status_t sta
     cJSON *idx = load_index(s);
     cJSON *entry;
     cJSON_ArrayForEach(entry, idx) {
-        cJSON *id_item = cJSON_GetObjectItem(entry, "id");
-        if (id_item && cJSON_GetStringValue(id_item) &&
-            strcmp(cJSON_GetStringValue(id_item), sid) == 0) {
+        const char *eid = j_str(entry, "id");
+        if (eid && strcmp(eid, sid) == 0) {
             cJSON_SetValuestring(cJSON_GetObjectItem(entry, "status"), st);
             cJSON_SetValuestring(cJSON_GetObjectItem(entry, "updated_at"), now);
             break;

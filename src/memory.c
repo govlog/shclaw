@@ -57,9 +57,10 @@ static void extract_tags(const char *content, cJSON *tags_arr) {
                 /* Check not duplicate */
                 int dup = 0;
                 cJSON *item;
-                cJSON_ArrayForEach(item, tags_arr)
-                    if (cJSON_GetStringValue(item) && strcmp(cJSON_GetStringValue(item), word) == 0)
-                        { dup = 1; break; }
+                cJSON_ArrayForEach(item, tags_arr) {
+                    const char *iv = cJSON_GetStringValue(item);
+                    if (iv && strcmp(iv, word) == 0) { dup = 1; break; }
+                }
                 if (!dup) {
                     cJSON_AddItemToArray(tags_arr, cJSON_CreateString(word));
                     tag_count++;
@@ -199,7 +200,7 @@ const char *memory_search(memory_t *m, const char *query, int n,
         /* Search backwards (most recent first) */
         for (int i = total - 1; i >= 0 && found < n; i--) {
             cJSON *entry = cJSON_GetArrayItem(m->cache, i);
-            const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(entry, "content"));
+            const char *content = j_str(entry, "content");
             if (!content) continue;
 
             /* Lowercase content for comparison */
@@ -247,19 +248,11 @@ void memory_clear(memory_t *m) {
 /* ── Facts ──────────────────────────────────────────────── */
 
 static cJSON *load_facts(memory_t *m) {
-    char *data = file_slurp(facts_path(m), NULL);
-    if (!data) return cJSON_CreateObject();
-    cJSON *obj = cJSON_Parse(data);
-    free(data);
-    return obj ? obj : cJSON_CreateObject();
+    return json_load_object(facts_path(m));
 }
 
 static void save_facts(memory_t *m, cJSON *facts) {
-    char *json = cJSON_Print(facts);
-    if (json) {
-        atomic_write(facts_path(m), json, strlen(json));
-        free(json);
-    }
+    json_save_atomic(facts_path(m), facts, 1);
 }
 
 const char *facts_set(memory_t *m, const char *key, const char *value,

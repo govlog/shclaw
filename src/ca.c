@@ -31,9 +31,12 @@ typedef struct {
 static void dn_append(void *ctx, const void *data, size_t len) {
     dn_buf_t *dn = ctx;
     if (dn->len + len > dn->cap) {
-        dn->cap = (dn->len + len) * 2;
-        if (dn->cap < 256) dn->cap = 256;
-        dn->buf = realloc(dn->buf, dn->cap);
+        size_t new_cap = (dn->len + len) * 2;
+        if (new_cap < 256) new_cap = 256;
+        unsigned char *grown = realloc(dn->buf, new_cap);
+        if (!grown) return;
+        dn->buf = grown;
+        dn->cap = new_cap;
     }
     memcpy(dn->buf + dn->len, data, len);
     dn->len += len;
@@ -66,9 +69,12 @@ static void add_trust_anchor(const unsigned char *der, size_t der_len) {
 
     /* Grow anchor array */
     if (g_anchor_count >= g_anchor_cap) {
-        g_anchor_cap = g_anchor_cap ? g_anchor_cap * 2 : 64;
-        g_anchors = realloc(g_anchors,
-                            g_anchor_cap * sizeof(br_x509_trust_anchor));
+        size_t new_cap = g_anchor_cap ? g_anchor_cap * 2 : 64;
+        br_x509_trust_anchor *grown = realloc(g_anchors,
+                            new_cap * sizeof(br_x509_trust_anchor));
+        if (!grown) { free(dn.buf); return; }
+        g_anchors = grown;
+        g_anchor_cap = new_cap;
     }
 
     br_x509_trust_anchor *ta = &g_anchors[g_anchor_count];
@@ -81,19 +87,24 @@ static void add_trust_anchor(const unsigned char *der, size_t der_len) {
 
     /* Copy public key */
     if (pk->key_type == BR_KEYTYPE_RSA) {
+        unsigned char *n = malloc(pk->key.rsa.nlen);
+        unsigned char *e = malloc(pk->key.rsa.elen);
+        if (!n || !e) { free(n); free(e); free(dn.buf); return; }
+        memcpy(n, pk->key.rsa.n, pk->key.rsa.nlen);
+        memcpy(e, pk->key.rsa.e, pk->key.rsa.elen);
         ta->pkey.key_type = BR_KEYTYPE_RSA;
-        ta->pkey.key.rsa.n = malloc(pk->key.rsa.nlen);
-        memcpy(ta->pkey.key.rsa.n, pk->key.rsa.n, pk->key.rsa.nlen);
+        ta->pkey.key.rsa.n = n;
         ta->pkey.key.rsa.nlen = pk->key.rsa.nlen;
-        ta->pkey.key.rsa.e = malloc(pk->key.rsa.elen);
-        memcpy(ta->pkey.key.rsa.e, pk->key.rsa.e, pk->key.rsa.elen);
+        ta->pkey.key.rsa.e = e;
         ta->pkey.key.rsa.elen = pk->key.rsa.elen;
         g_anchor_count++;
     } else if (pk->key_type == BR_KEYTYPE_EC) {
+        unsigned char *q = malloc(pk->key.ec.qlen);
+        if (!q) { free(dn.buf); return; }
+        memcpy(q, pk->key.ec.q, pk->key.ec.qlen);
         ta->pkey.key_type = BR_KEYTYPE_EC;
         ta->pkey.key.ec.curve = pk->key.ec.curve;
-        ta->pkey.key.ec.q = malloc(pk->key.ec.qlen);
-        memcpy(ta->pkey.key.ec.q, pk->key.ec.q, pk->key.ec.qlen);
+        ta->pkey.key.ec.q = q;
         ta->pkey.key.ec.qlen = pk->key.ec.qlen;
         g_anchor_count++;
     } else {
@@ -133,7 +144,11 @@ static int load_pem_file(const char *path) {
         if (ll >= 27 && strncmp(line, "-----BEGIN CERTIFICATE-----", 27) == 0) {
             in_cert = 1;
             der_len = 0;
-            if (!der) { der_cap = 4096; der = malloc(der_cap); }
+            if (!der) {
+                der_cap = 4096;
+                der = malloc(der_cap);
+                if (!der) { free(pem_data); return -1; }
+            }
         } else if (in_cert && ll >= 25 &&
                    strncmp(line, "-----END CERTIFICATE-----", 25) == 0) {
             if (der_len > 0)
@@ -149,8 +164,11 @@ static int load_pem_file(const char *path) {
                 unsigned d2 = B64[(unsigned char)line[i+3]];
 
                 if (der_len + 3 > der_cap) {
-                    der_cap *= 2;
-                    der = realloc(der, der_cap);
+                    size_t new_cap = der_cap * 2;
+                    unsigned char *grown = realloc(der, new_cap);
+                    if (!grown) { free(der); free(pem_data); return -1; }
+                    der = grown;
+                    der_cap = new_cap;
                 }
                 der[der_len++] = (a << 2) | (b >> 4);
                 if (line[i+2] != '=')

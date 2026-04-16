@@ -139,9 +139,20 @@ int     atomic_write(const char *path, const char *data, size_t len);
 char   *file_slurp(const char *path, size_t *out_len);
 int     file_exists(const char *path);
 int     mkdirs(const char *path);
+int     mkdirs_for(const char *path); /* mkdirs() of parent of given path */
 void    now_iso(char *buf, size_t sz);
 int64_t now_ms(void);
 void    sha256_hex(const void *data, size_t len, char out[65]);
+
+/* JSON helpers — NULL-safe shortcuts for cJSON object access */
+const char *j_str(cJSON *obj, const char *key);
+int         j_int(cJSON *obj, const char *key, int def);
+int         j_bool(cJSON *obj, const char *key, int def);
+
+/* JSON file I/O — atomic write, fallback on parse error */
+cJSON *json_load_array(const char *path);   /* always returns array */
+cJSON *json_load_object(const char *path);  /* always returns object */
+int    json_save_atomic(const char *path, cJSON *obj, int formatted);
 
 /* ── Provider ───────────────────────────────────────────── */
 

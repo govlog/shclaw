@@ -219,28 +219,6 @@ cJSON *tools_to_json(int is_builder) {
     return arr;
 }
 
-/* Helper to get string from cJSON input */
-static const char *j_str(cJSON *input, const char *key) {
-    if (!input) return NULL;
-    cJSON *item = cJSON_GetObjectItem(input, key);
-    return (item && cJSON_IsString(item)) ? item->valuestring : NULL;
-}
-
-static int j_int(cJSON *input, const char *key, int def) {
-    if (!input) return def;
-    cJSON *item = cJSON_GetObjectItem(input, key);
-    return (item && cJSON_IsNumber(item)) ? item->valueint : def;
-}
-
-static int j_bool(cJSON *input, const char *key, int def) {
-    if (!input) return def;
-    cJSON *item = cJSON_GetObjectItem(input, key);
-    if (!item) return def;
-    if (cJSON_IsBool(item)) return cJSON_IsTrue(item);
-    return def;
-}
-
-
 const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
                          char *out, size_t out_sz) {
     switch (tool_id) {
@@ -280,11 +258,7 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
         int append = j_bool(input, "append", 0);
         if (!path || !content) { snprintf(out, out_sz, "Error: path and content required"); return out; }
 
-        /* Ensure parent dir */
-        char dir[4096];
-        snprintf(dir, sizeof(dir), "%s", path);
-        char *slash = strrchr(dir, '/');
-        if (slash) { *slash = '\0'; mkdirs(dir); }
+        mkdirs_for(path);
 
         if (append) {
             FILE *f = fopen(path, "a");

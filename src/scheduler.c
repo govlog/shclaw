@@ -23,19 +23,11 @@ static int interval_seconds(const char *name) {
 }
 
 static cJSON *load_tasks(scheduler_t *s) {
-    char *data = file_slurp(s->path, NULL);
-    if (!data) return cJSON_CreateArray();
-    cJSON *arr = cJSON_Parse(data);
-    free(data);
-    return arr ? arr : cJSON_CreateArray();
+    return json_load_array(s->path);
 }
 
 static void save_tasks(scheduler_t *s, cJSON *tasks) {
-    char *json = cJSON_Print(tasks);
-    if (json) {
-        atomic_write(s->path, json, strlen(json));
-        free(json);
-    }
+    json_save_atomic(s->path, tasks, 1);
 }
 
 /* Parse ISO 8601 datetime to time_t.
@@ -43,7 +35,7 @@ static void save_tasks(scheduler_t *s, cJSON *tasks) {
  * No timezone suffix → local time (mktime). */
 static time_t parse_iso(const char *iso) {
     struct tm tm = {0};
-    if (!iso || !iso[0]) return 0;
+    if (!iso || !iso[0] || strlen(iso) < 19) return 0;
     if (sscanf(iso, "%d-%d-%dT%d:%d:%d",
                &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
                &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6)
@@ -51,16 +43,12 @@ static time_t parse_iso(const char *iso) {
     tm.tm_year -= 1900;
     tm.tm_mon -= 1;
 
-    /* Check for UTC marker */
-    const char *p = iso;
-    while (*p && *p != 'Z' && *p != '+' && *p != '-') p++;
-    /* Skip past the time digits to find timezone part */
-    p = strchr(iso + 10, 'Z');  /* look for Z after the date */
-    if (p) return timegm(&tm);
-    p = strstr(iso + 10, "+00:00");
-    if (p) return timegm(&tm);
-    p = strstr(iso + 10, "+00");
-    if (p) return timegm(&tm);
+    /* Look for UTC marker after the time portion (offset 19) */
+    const char *tz = iso + 19;
+    if (*tz == 'Z' ||
+        strncmp(tz, "+00:00", 6) == 0 ||
+        strncmp(tz, "+0000", 5) == 0)
+        return timegm(&tm);
 
     /* No UTC marker — treat as local time */
     tm.tm_isdst = -1;
@@ -70,11 +58,7 @@ static time_t parse_iso(const char *iso) {
 void scheduler_init(scheduler_t *s, const char *json_path) {
     snprintf(s->path, sizeof(s->path), "%s", json_path);
     pthread_mutex_init(&s->lock, NULL);
-    /* Ensure parent dir exists */
-    char dir[4096];
-    snprintf(dir, sizeof(dir), "%s", json_path);
-    char *slash = strrchr(dir, '/');
-    if (slash) { *slash = '\0'; mkdirs(dir); }
+    mkdirs_for(json_path);
 }
 
 const char *sched_add(scheduler_t *s, const char *run_at, const char *desc,
@@ -156,7 +140,7 @@ const char *sched_update(scheduler_t *s, const char *id, const char *run_at,
 
     cJSON *task;
     cJSON_ArrayForEach(task, tasks) {
-        const char *tid = cJSON_GetStringValue(cJSON_GetObjectItem(task, "id"));
+        const char *tid = j_str(task, "id");
         if (tid && strcmp(tid, id) == 0) {
             if (run_at && run_at[0])
                 cJSON_SetValuestring(cJSON_GetObjectItem(task, "run_at"), run_at);
@@ -198,7 +182,7 @@ const char *sched_cancel(scheduler_t *s, const char *id,
     cJSON *new_tasks = cJSON_CreateArray();
     cJSON *task;
     cJSON_ArrayForEach(task, tasks) {
-        const char *tid = cJSON_GetStringValue(cJSON_GetObjectItem(task, "id"));
+        const char *tid = j_str(task, "id");
         if (tid && strcmp(tid, id) == 0)
             found = 1;
         else
@@ -226,7 +210,7 @@ int sched_get_due(scheduler_t *s, cJSON **out) {
 
     cJSON *task;
     cJSON_ArrayForEach(task, tasks) {
-        const char *run_at = cJSON_GetStringValue(cJSON_GetObjectItem(task, "run_at"));
+        const char *run_at = j_str(task, "run_at");
         if (!run_at) continue;
         time_t t = parse_iso(run_at);
         if (t > 0 && t <= now) {
@@ -250,24 +234,24 @@ void sched_mark_done(scheduler_t *s, cJSON *ids) {
 
     cJSON *task;
     cJSON_ArrayForEach(task, tasks) {
-        const char *tid = cJSON_GetStringValue(cJSON_GetObjectItem(task, "id"));
+        const char *tid = j_str(task, "id");
         if (!tid) continue;
 
         /* Check if this task is in the done list */
         int is_done = 0;
         cJSON *id_item;
-        cJSON_ArrayForEach(id_item, ids)
-            if (cJSON_GetStringValue(id_item) && strcmp(cJSON_GetStringValue(id_item), tid) == 0)
-                { is_done = 1; break; }
+        cJSON_ArrayForEach(id_item, ids) {
+            const char *iv = cJSON_GetStringValue(id_item);
+            if (iv && strcmp(iv, tid) == 0) { is_done = 1; break; }
+        }
 
         if (is_done) {
-            cJSON *recur = cJSON_GetObjectItem(task, "recurring");
-            if (recur && cJSON_GetStringValue(recur)) {
-                int secs = interval_seconds(cJSON_GetStringValue(recur));
+            const char *recur = j_str(task, "recurring");
+            if (recur) {
+                int secs = interval_seconds(recur);
                 if (secs > 0) {
                     /* Advance to next run */
-                    const char *run_at = cJSON_GetStringValue(cJSON_GetObjectItem(task, "run_at"));
-                    time_t next = parse_iso(run_at);
+                    time_t next = parse_iso(j_str(task, "run_at"));
                     while (next <= now) next += secs;
 
                     char next_iso[32];

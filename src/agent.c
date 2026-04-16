@@ -61,7 +61,7 @@ static void extract_agent_message_request(const char *trig_data,
     }
 
     cJSON *first = cJSON_GetArrayItem(msgs, 0);
-    const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(first, "content"));
+    const char *content = j_str(first, "content");
     if (content)
         snprintf(out, out_sz, "%s", content);
     cJSON_Delete(msgs);
@@ -77,8 +77,7 @@ static void builder_notify_stall(agent_ctx_t *agent, const char *thread_id,
     cJSON *session = session_get(agent->sessions, thread_id);
     if (!session) return;
 
-    const char *initiator =
-        cJSON_GetStringValue(cJSON_GetObjectItem(session, "initiator"));
+    const char *initiator = j_str(session, "initiator");
 
     if (initiator && initiator[0]) {
         char msg[TC_BUF_LG];
@@ -117,8 +116,7 @@ static void builder_notify_success(agent_ctx_t *agent, const char *thread_id,
     cJSON *session = session_get(agent->sessions, thread_id);
     if (!session) return;
 
-    const char *initiator =
-        cJSON_GetStringValue(cJSON_GetObjectItem(session, "initiator"));
+    const char *initiator = j_str(session, "initiator");
 
     if (initiator && initiator[0]) {
         char msg[TC_BUF_LG];
@@ -367,9 +365,14 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
         char *text_combined = calloc(1, TC_BUF_HUGE);
         for (int i = 0; i < resp.n_text; i++) {
             if (resp.text_blocks[i].text) {
-                if (text_combined[0]) strcat(text_combined, "\n");
-                strncat(text_combined, resp.text_blocks[i].text,
-                        TC_BUF_HUGE - strlen(text_combined) - 1);
+                size_t cur = strlen(text_combined);
+                size_t left = TC_BUF_HUGE - cur - 1;
+                if (left == 0) break;
+                if (cur > 0) {
+                    strncat(text_combined, "\n", left);
+                    left = TC_BUF_HUGE - strlen(text_combined) - 1;
+                }
+                strncat(text_combined, resp.text_blocks[i].text, left);
             }
         }
 

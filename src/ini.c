@@ -82,8 +82,10 @@ ini_t *ini_load(const char *path) {
     if (!f) return NULL;
 
     ini_t *ini = calloc(1, sizeof(ini_t));
+    if (!ini) { fclose(f); return NULL; }
     ini->capacity = INI_INITIAL_CAP;
     ini->entries = calloc(ini->capacity, sizeof(ini_entry_t));
+    if (!ini->entries) { free(ini); fclose(f); return NULL; }
 
     char section[64] = "";
     char line[TC_BUF_XL];
@@ -128,8 +130,11 @@ ini_t *ini_load(const char *path) {
 
         /* Grow if needed */
         if (ini->count >= ini->capacity) {
-            ini->capacity *= 2;
-            ini->entries = realloc(ini->entries, ini->capacity * sizeof(ini_entry_t));
+            int new_cap = ini->capacity * 2;
+            ini_entry_t *grown = realloc(ini->entries, new_cap * sizeof(ini_entry_t));
+            if (!grown) break;
+            ini->entries = grown;
+            ini->capacity = new_cap;
         }
 
         ini_entry_t *e = &ini->entries[ini->count++];

@@ -17,7 +17,7 @@ static void append_text_block(char *buf, size_t buf_sz, const char *text) {
 }
 
 static void append_openai_message(cJSON *oai_messages, cJSON *msg) {
-    const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "role"));
+    const char *role = j_str(msg, "role");
     cJSON *content = cJSON_GetObjectItem(msg, "content");
 
     if (!content || !cJSON_IsArray(content)) {
@@ -33,18 +33,18 @@ static void append_openai_message(cJSON *oai_messages, cJSON *msg) {
 
         cJSON *block;
         cJSON_ArrayForEach(block, content) {
-            const char *btype = cJSON_GetStringValue(cJSON_GetObjectItem(block, "type"));
+            const char *btype = j_str(block, "type");
             if (!btype) continue;
 
             if (strcmp(btype, "text") == 0 || strcmp(btype, "thinking") == 0) {
                 append_text_block(text_buf, sizeof(text_buf),
-                                  cJSON_GetStringValue(cJSON_GetObjectItem(block, "text")));
+                                  j_str(block, "text"));
                 continue;
             }
 
             if (strcmp(btype, "tool_use") == 0) {
-                const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(block, "id"));
-                const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(block, "name"));
+                const char *id = j_str(block, "id");
+                const char *name = j_str(block, "name");
                 char *args = json_string_or_empty(cJSON_GetObjectItem(block, "input"));
                 if (!name || !args) {
                     free(args);
@@ -82,12 +82,12 @@ static void append_openai_message(cJSON *oai_messages, cJSON *msg) {
         cJSON *block;
 
         cJSON_ArrayForEach(block, content) {
-            const char *btype = cJSON_GetStringValue(cJSON_GetObjectItem(block, "type"));
+            const char *btype = j_str(block, "type");
             if (!btype) continue;
 
             if (strcmp(btype, "tool_result") == 0) {
-                const char *tool_call_id = cJSON_GetStringValue(cJSON_GetObjectItem(block, "tool_use_id"));
-                const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(block, "content"));
+                const char *tool_call_id = j_str(block, "tool_use_id");
+                const char *text = j_str(block, "content");
                 cJSON *tool_msg = cJSON_CreateObject();
                 cJSON_AddStringToObject(tool_msg, "role", "tool");
                 cJSON_AddStringToObject(tool_msg, "tool_call_id", tool_call_id ? tool_call_id : "");
@@ -95,7 +95,7 @@ static void append_openai_message(cJSON *oai_messages, cJSON *msg) {
                 cJSON_AddItemToArray(oai_messages, tool_msg);
             } else if (strcmp(btype, "text") == 0) {
                 append_text_block(text_buf, sizeof(text_buf),
-                                  cJSON_GetStringValue(cJSON_GetObjectItem(block, "text")));
+                                  j_str(block, "text"));
             }
         }
 
@@ -154,7 +154,7 @@ static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
     memset(out, 0, sizeof(*out));
 
     /* Stop reason */
-    const char *stop = cJSON_GetStringValue(cJSON_GetObjectItem(root, "stop_reason"));
+    const char *stop = j_str(root, "stop_reason");
     snprintf(out->stop_reason, sizeof(out->stop_reason), "%s",
              stop ? stop : "end_turn");
 
@@ -167,11 +167,11 @@ static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
 
     cJSON *block;
     cJSON_ArrayForEach(block, content) {
-        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(block, "type"));
+        const char *type = j_str(block, "type");
         if (!type) continue;
 
         if (strcmp(type, "text") == 0 || strcmp(type, "thinking") == 0) {
-            const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(block, "text"));
+            const char *text = j_str(block, "text");
             if (text) {
                 out->text_blocks[out->n_text].text = strdup(text);
                 snprintf(out->text_blocks[out->n_text].type,
@@ -179,8 +179,8 @@ static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
                 out->n_text++;
             }
         } else if (strcmp(type, "tool_use") == 0) {
-            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(block, "id"));
-            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(block, "name"));
+            const char *id = j_str(block, "id");
+            const char *name = j_str(block, "name");
             cJSON *input = cJSON_GetObjectItem(block, "input");
 
             if (id && name) {
@@ -201,10 +201,8 @@ static cJSON *convert_tools_to_openai(cJSON *tools) {
     cJSON *t;
     cJSON_ArrayForEach(t, tools) {
         cJSON *func = cJSON_CreateObject();
-        cJSON_AddStringToObject(func, "name",
-            cJSON_GetStringValue(cJSON_GetObjectItem(t, "name")));
-        cJSON_AddStringToObject(func, "description",
-            cJSON_GetStringValue(cJSON_GetObjectItem(t, "description")));
+        cJSON_AddStringToObject(func, "name", j_str(t, "name"));
+        cJSON_AddStringToObject(func, "description", j_str(t, "description"));
         cJSON *schema = cJSON_GetObjectItem(t, "input_schema");
         if (schema)
             cJSON_AddItemToObject(func, "parameters", cJSON_Duplicate(schema, 1));
@@ -278,11 +276,11 @@ static int call_openai(provider_ref_t *prov, const char *system_prompt,
     cJSON *choices = cJSON_GetObjectItem(root, "choices");
     cJSON *choice = cJSON_GetArrayItem(choices, 0);
     cJSON *message = cJSON_GetObjectItem(choice, "message");
-    const char *finish = cJSON_GetStringValue(cJSON_GetObjectItem(choice, "finish_reason"));
+    const char *finish = j_str(choice, "finish_reason");
     cJSON *tool_calls = cJSON_GetObjectItem(message, "tool_calls");
 
     /* Text */
-    const char *content_text = cJSON_GetStringValue(cJSON_GetObjectItem(message, "content"));
+    const char *content_text = j_str(message, "content");
     out->text_blocks = calloc(2, sizeof(text_block_t));
     out->tool_calls = calloc((tool_calls ? cJSON_GetArraySize(tool_calls) : 0) + 1,
                              sizeof(tool_call_t));
@@ -298,9 +296,9 @@ static int call_openai(provider_ref_t *prov, const char *system_prompt,
         cJSON *tc;
         cJSON_ArrayForEach(tc, tool_calls) {
             cJSON *func = cJSON_GetObjectItem(tc, "function");
-            const char *tc_id = cJSON_GetStringValue(cJSON_GetObjectItem(tc, "id"));
-            const char *tc_name = cJSON_GetStringValue(cJSON_GetObjectItem(func, "name"));
-            const char *tc_args = cJSON_GetStringValue(cJSON_GetObjectItem(func, "arguments"));
+            const char *tc_id = j_str(tc, "id");
+            const char *tc_name = j_str(func, "name");
+            const char *tc_args = j_str(func, "arguments");
 
             if (tc_id && tc_name) {
                 snprintf(out->tool_calls[out->n_tools].id, 64, "%s", tc_id);

@@ -109,6 +109,65 @@ int mkdirs(const char *path) {
     return mkdir(tmp, 0755) == 0 || errno == EEXIST ? 0 : -1;
 }
 
+int mkdirs_for(const char *path) {
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    char *slash = strrchr(tmp, '/');
+    if (!slash) return 0;
+    *slash = '\0';
+    return tmp[0] ? mkdirs(tmp) : 0;
+}
+
+/* ── JSON helpers ─────────────────────────────────────── */
+
+const char *j_str(cJSON *obj, const char *key) {
+    if (!obj) return NULL;
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    return (item && cJSON_IsString(item)) ? item->valuestring : NULL;
+}
+
+int j_int(cJSON *obj, const char *key, int def) {
+    if (!obj) return def;
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    return (item && cJSON_IsNumber(item)) ? item->valueint : def;
+}
+
+int j_bool(cJSON *obj, const char *key, int def) {
+    if (!obj) return def;
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    if (!item) return def;
+    if (cJSON_IsBool(item)) return cJSON_IsTrue(item);
+    return def;
+}
+
+cJSON *json_load_array(const char *path) {
+    char *data = file_slurp(path, NULL);
+    if (!data) return cJSON_CreateArray();
+    cJSON *arr = cJSON_Parse(data);
+    free(data);
+    if (arr && cJSON_IsArray(arr)) return arr;
+    cJSON_Delete(arr);
+    return cJSON_CreateArray();
+}
+
+cJSON *json_load_object(const char *path) {
+    char *data = file_slurp(path, NULL);
+    if (!data) return cJSON_CreateObject();
+    cJSON *obj = cJSON_Parse(data);
+    free(data);
+    if (obj && cJSON_IsObject(obj)) return obj;
+    cJSON_Delete(obj);
+    return cJSON_CreateObject();
+}
+
+int json_save_atomic(const char *path, cJSON *obj, int formatted) {
+    char *json = formatted ? cJSON_Print(obj) : cJSON_PrintUnformatted(obj);
+    if (!json) return -1;
+    int ret = atomic_write(path, json, strlen(json));
+    free(json);
+    return ret;
+}
+
 void now_iso(char *buf, size_t sz) {
     time_t t = time(NULL);
     struct tm tm;
