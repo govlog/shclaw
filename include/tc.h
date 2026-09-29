@@ -35,7 +35,7 @@
 
 /* ── Constants ──────────────────────────────────────────── */
 
-#define TC_VERSION          "0.1.1"
+#define TC_VERSION          "0.1.2"
 #define TC_MAX_AGENTS       16
 #define TC_MAX_PLUGINS      32
 #define TC_MAX_PARAMS       16
