@@ -17,7 +17,7 @@ cJSON
   Source:  https://github.com/DaveGamble/cJSON
 
 TinyCC (libtcc)
-  Copyright (c) 2001-2024 Fabrice Bellard and contributors
+  Copyright (c) 2001-2026 Fabrice Bellard and contributors
   License: LGPL-2.1
   Source:  https://repo.or.cz/tinycc.git
 
@@ -31,7 +31,7 @@ TinyCC (libtcc)
   replace the TCC source tree in vendor/tcc/ before building.
 
 Cosmopolitan Libc (cosmo build only)
-  Copyright (c) 2020-2024 Justine Alexandra Roberts Tunney
+  Copyright (c) 2020-2025 Justine Alexandra Roberts Tunney
   License: ISC
   Source:  https://github.com/jart/cosmopolitan
 

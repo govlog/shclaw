@@ -7,159 +7,102 @@
 
 static const char *trigger_type_str(trigger_type_t t) {
     switch (t) {
-    case TRIG_STARTUP:   return "startup";
     case TRIG_IRC:       return "irc";
     case TRIG_SCHEDULE:  return "schedule";
     case TRIG_AGENT_MSG: return "agent_message";
-    case TRIG_SOCKET:    return "socket";
     }
     return "unknown";
 }
 
-/* Find tool ID by name */
-static int find_tool(const char *name) {
-    static const char *tool_names[] = {
-        [TOOL_EXEC] = "exec",
-        [TOOL_READ_FILE] = "read_file",
-        [TOOL_WRITE_FILE] = "write_file",
-        [TOOL_SCHEDULE_TASK] = "schedule_task",
-        [TOOL_SCHEDULE_RECURRING] = "schedule_recurring",
-        [TOOL_LIST_TASKS] = "list_tasks",
-        [TOOL_UPDATE_TASK] = "update_task",
-        [TOOL_CANCEL_TASK] = "cancel_task",
-        [TOOL_REMEMBER] = "remember",
-        [TOOL_RECALL] = "recall",
-        [TOOL_SET_FACT] = "set_fact",
-        [TOOL_GET_FACT] = "get_fact",
-        [TOOL_SEND_MESSAGE] = "send_message",
-        [TOOL_LIST_AGENTS] = "list_agents",
-        [TOOL_CREATE_PLUGIN] = "create_plugin",
-        [TOOL_CLEAR_MEMORY] = "clear_memory",
-    };
-
-    for (int i = 0; i < TOOL_COUNT; i++)
-        if (tool_names[i] && strcmp(tool_names[i], name) == 0)
-            return i;
-    return -1;
+static int is_error(const char *result) {
+    return !result || strncmp(result, "Error", 5) == 0;
 }
 
-static int builder_create_plugin_succeeded(const char *result) {
-    if (!result) return 0;
-    return strstr(result, "compiled and loaded.") != NULL;
-}
+/* Who the session answers to */
+typedef struct {
+    char requesters[TC_MAX_AGENTS][32];  /* agents waiting for an answer */
+    int  n_requesters;
+    int  reply_batch;   /* only answers to our earlier requests */
+    int  relay;         /* text replies go to the owner (IRC/TUI) */
+} trigger_info_t;
 
-static void extract_agent_message_request(const char *trig_data,
-                                          char *out, size_t out_sz) {
-    if (!out || out_sz == 0) return;
-    out[0] = '\0';
-    if (!trig_data || !trig_data[0]) return;
+/* Per-session harness state */
+typedef struct {
+    int builder_retry_used;
+    int hub_retry_used;
+    int empty_retry_used;
+    int plugin_done;
+    int plugin_failed;            /* last create_plugin returned an error */
+    int sent_message;
+    int listed_agents;
+    int blocked_repeats;
+    char sent_to[8][32];          /* agents already messaged */
+    int  n_sent_to;
+    char notice[TC_BUF_LG];       /* harness notice for the requester */
+    uint64_t call_hash[64];       /* tool calls already run (name + args) */
+    int      call_count[64];
+    int      n_calls;
+} session_state_t;
 
-    cJSON *msgs = cJSON_Parse(trig_data);
-    if (!msgs || !cJSON_IsArray(msgs)) {
-        cJSON_Delete(msgs);
+/* ── Trigger ────────────────────────────────────────────── */
+
+static void parse_trigger(trigger_type_t type, const char *data, trigger_info_t *t) {
+    memset(t, 0, sizeof(*t));
+    if (type != TRIG_AGENT_MSG) {
+        t->relay = 1;
         return;
     }
-
-    cJSON *first = cJSON_GetArrayItem(msgs, 0);
-    const char *content = j_str(first, "content");
-    if (content)
-        snprintf(out, out_sz, "%s", content);
+    cJSON *msgs = cJSON_Parse(data);
+    cJSON *m;
+    cJSON_ArrayForEach(m, msgs) {
+        const char *from = j_str(m, "from");
+        if (!from || cJSON_IsTrue(cJSON_GetObjectItem(m, "reply"))) continue;
+        int known = 0;
+        for (int i = 0; i < t->n_requesters; i++)
+            known |= strcmp(t->requesters[i], from) == 0;
+        if (!known && t->n_requesters < TC_MAX_AGENTS)
+            snprintf(t->requesters[t->n_requesters++], sizeof(t->requesters[0]), "%s", from);
+    }
     cJSON_Delete(msgs);
+    t->reply_batch = t->n_requesters == 0;
+    t->relay = t->reply_batch;
 }
 
-static void builder_notify_stall(agent_ctx_t *agent, const char *thread_id,
-                                 const char *trig_data,
-                                 const char *last_text) {
-    if (!agent || !agent->sessions || !agent->messenger ||
-        !thread_id || !thread_id[0])
-        return;
-
-    cJSON *session = session_get(agent->sessions, thread_id);
-    if (!session) return;
-
-    const char *initiator = j_str(session, "initiator");
-
-    if (initiator && initiator[0]) {
-        char msg[TC_BUF_LG];
-        char out[TC_BUF_MD];
-        char request[TC_BUF_MD];
-
-        extract_agent_message_request(trig_data, request, sizeof(request));
-
-        snprintf(msg, sizeof(msg),
-                 "Builder stalled: plugin request ended without "
-                 "create_plugin or send_message.\n"
-                 "Original request: %s\n"
-                 "Last model reply: %s",
-                 request[0] ? request : "(unknown)",
-                 (last_text && last_text[0]) ? last_text : "(empty)");
-
-        messenger_send(agent->messenger, agent->name, initiator,
-                       msg, thread_id, out, sizeof(out));
-        session_add_message(agent->sessions, thread_id,
-                            agent->name, initiator, msg, MSG_DELEGATION);
-    } else if (agent->irc) {
-        irc_reply(agent->irc, agent->name,
-                  "Builder stalled: plugin request ended without action.");
+/* The user turn as plain text: small models read prose better than JSON */
+static char *render_trigger(trigger_type_t type, const char *data) {
+    if (!data || !data[0])
+        return strdup(PROMPT_EMPTY_TRIGGER);
+    cJSON *arr = type == TRIG_IRC ? NULL : cJSON_Parse(data);
+    if (!cJSON_IsArray(arr)) {
+        cJSON_Delete(arr);
+        return strdup(data);
     }
 
-    cJSON_Delete(session);
-}
-
-static void builder_notify_success(agent_ctx_t *agent, const char *thread_id,
-                                   const char *trig_data,
-                                   const char *result_text) {
-    if (!agent || !agent->sessions || !agent->messenger ||
-        !thread_id || !thread_id[0])
-        return;
-
-    cJSON *session = session_get(agent->sessions, thread_id);
-    if (!session) return;
-
-    const char *initiator = j_str(session, "initiator");
-
-    if (initiator && initiator[0]) {
-        char msg[TC_BUF_LG];
-        char out[TC_BUF_MD];
-        char request[TC_BUF_MD];
-
-        extract_agent_message_request(trig_data, request, sizeof(request));
-
-        snprintf(msg, sizeof(msg),
-                 "Builder completed the plugin request.\n"
-                 "Original request: %s\n"
-                 "Result: %s",
-                 request[0] ? request : "(unknown)",
-                 (result_text && result_text[0]) ? result_text : "(no result)");
-
-        messenger_send(agent->messenger, agent->name, initiator,
-                       msg, thread_id, out, sizeof(out));
-        session_add_message(agent->sessions, thread_id,
-                            agent->name, initiator, msg, MSG_DELEGATION);
-    } else if (agent->irc) {
-        irc_reply(agent->irc, agent->name,
-                  "Builder completed the plugin request.");
+    size_t cap = strlen(data) + 256 * (size_t)(cJSON_GetArraySize(arr) + 1);
+    char *out = malloc(cap);
+    size_t off = 0;
+    cJSON *it;
+    if (out) out[0] = '\0';
+    cJSON_ArrayForEach(it, arr) {
+        if (!out) break;
+        if (off) buf_appendf(out, cap, &off, "\n\n");
+        if (type == TRIG_SCHEDULE) {
+            const char *desc = j_str(it, "description");
+            const char *prompt = j_str(it, "prompt");
+            buf_appendf(out, cap, &off, PROMPT_TASK_DUE, desc ? desc : "");
+            if (prompt && prompt[0])
+                buf_appendf(out, cap, &off, "\nInstructions: %s", prompt);
+        } else {
+            const char *from = j_str(it, "from");
+            const char *content = j_str(it, "content");
+            buf_appendf(out, cap, &off,
+                        cJSON_IsTrue(cJSON_GetObjectItem(it, "reply"))
+                            ? PROMPT_REPLY_FROM : PROMPT_MESSAGE_FROM,
+                        from ? from : "?", content ? content : "");
+        }
     }
-
-    cJSON_Delete(session);
-}
-
-static int builder_read_file_duplicate(const char *input_json,
-                                       char seen[][TC_BUF_SM],
-                                       int n_seen) {
-    if (!input_json) return 0;
-    for (int i = 0; i < n_seen; i++)
-        if (strcmp(seen[i], input_json) == 0)
-            return 1;
-    return 0;
-}
-
-static void builder_mark_read_file(const char *input_json,
-                                   char seen[][TC_BUF_SM],
-                                   int *n_seen) {
-    if (!input_json || !n_seen || *n_seen >= 16) return;
-    snprintf(seen[*n_seen], TC_BUF_SM, "%s", input_json);
-    (*n_seen)++;
+    cJSON_Delete(arr);
+    return out ? out : strdup(data);
 }
 
 /* Extract plugin C code from a text reply (markdown block or raw).
@@ -223,464 +166,499 @@ static int builder_extract_code(const char *text,
     return 1;
 }
 
-void agent_build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
-                               const char *trig_data, const char *thread_id,
-                               const char **all_agents,
-                               const char **all_specialties, int n_agents,
-                               char *out, size_t out_sz) {
-    char now[96], memories[TC_BUF_XL], schedule[TC_BUF_LG];
-    {
-        time_t t = time(NULL);
-        struct tm utc, loc;
-        gmtime_r(&t, &utc);
-        localtime_r(&t, &loc);
-        char utc_str[32], loc_str[32];
-        snprintf(utc_str, sizeof(utc_str), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-                 utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
-                 utc.tm_hour, utc.tm_min, utc.tm_sec);
-        snprintf(loc_str, sizeof(loc_str), "%04d-%02d-%02dT%02d:%02d:%02d",
-                 loc.tm_year + 1900, loc.tm_mon + 1, loc.tm_mday,
-                 loc.tm_hour, loc.tm_min, loc.tm_sec);
-        if (strcmp(utc_str, loc_str) == 0)
-            snprintf(now, sizeof(now), "%s", utc_str);
-        else
-            snprintf(now, sizeof(now), "%s (local: %s)", utc_str, loc_str);
-    }
-    memory_search(&agent->memory, NULL, 15, memories, sizeof(memories));
+/* ── System prompt ──────────────────────────────────────── */
+
+static void build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
+                                const trigger_info_t *trig, const char *thread_id,
+                                char *out, size_t out_sz) {
+    char now[96], utc_str[32], loc_str[32];
+    time_t t = time(NULL);
+    format_time(t, 0, utc_str, sizeof(utc_str));
+    format_time(t, 1, loc_str, sizeof(loc_str));
+    /* Local time first: tools take local times */
+    if (strncmp(utc_str, loc_str, strlen(loc_str)) == 0)
+        snprintf(now, sizeof(now), "%s", utc_str);
+    else
+        snprintf(now, sizeof(now), "%s local time (UTC: %s)", loc_str, utc_str);
+
+    char *memories = malloc(TC_BUF_XL);
+    char schedule[TC_BUF_LG], facts[TC_BUF_LG];
+    if (memories)
+        memory_search(&agent->memory, NULL, 15, memories, TC_BUF_XL);
     sched_list(&agent->scheduler, schedule, sizeof(schedule));
+    facts_get(&agent->memory, "", facts, sizeof(facts));
 
-    /* Build agents roster (with specialties) */
-    char agents_text[TC_BUF_MD] = "";
-    int off = 0;
-    for (int i = 0; i < n_agents; i++) {
-        if (strcmp(all_agents[i], agent->name) == 0) continue;
-        if (all_specialties && all_specialties[i] && all_specialties[i][0])
-            off += snprintf(agents_text + off, sizeof(agents_text) - off,
-                            "- %s — %s\n", all_agents[i], all_specialties[i]);
-        else
-            off += snprintf(agents_text + off, sizeof(agents_text) - off,
-                            "- %s\n", all_agents[i]);
+    /* Other agents, with their specialty */
+    char agents_text[TC_BUF_LG] = "";
+    size_t off = 0;
+    for (int i = 0; i < agent->n_peers; i++) {
+        agent_ctx_t *p = &agent->peers[i];
+        if (p == agent) continue;
+        buf_appendf(agents_text, sizeof(agents_text), &off, "- %s%s%s\n", p->name,
+                    p->specialty[0] ? " — " : "", p->specialty);
     }
 
-    /* Objectives */
-    char objectives[TC_BUF_MD] = "";
+    char objectives[TC_BUF_LG] = "";
     off = 0;
     for (int i = 0; i < agent->n_objectives; i++)
-        off += snprintf(objectives + off, sizeof(objectives) - off,
-                        "- %s\n", agent->objectives[i]);
+        buf_appendf(objectives, sizeof(objectives), &off, "- %s\n", agent->objectives[i]);
 
-    char builder_rules_buf[TC_BUF_LG * 2] = "";
+    char builder_rules[TC_BUF_LG * 2] = "";
     if (agent->is_builder) {
         char *tmpl = file_slurp("plugins/_template.c", NULL);
-        snprintf(builder_rules_buf, sizeof(builder_rules_buf),
-            PROMPT_BUILDER_RULES,
-            tmpl ? tmpl : "/* template unavailable */");
+        snprintf(builder_rules, sizeof(builder_rules), PROMPT_BUILDER_RULES,
+                 tmpl ? tmpl : "/* template unavailable */");
         free(tmpl);
     }
-    const char *builder_rules = builder_rules_buf;
 
-    const char *comm_base = (trig_type == TRIG_AGENT_MSG)
-        ? PROMPT_COMM_AGENT_MSG : PROMPT_COMM_DIRECT;
-    int relay_to_irc = (trig_type == TRIG_IRC || trig_type == TRIG_SCHEDULE ||
-                        trig_type == TRIG_SOCKET);
     char comm_rules[TC_BUF_LG];
     snprintf(comm_rules, sizeof(comm_rules), "%s%s",
-             comm_base, relay_to_irc ? PROMPT_IRC_FORMAT : "");
+             trig_type != TRIG_AGENT_MSG ? PROMPT_COMM_DIRECT :
+             trig->reply_batch ? PROMPT_COMM_AGENT_REPLY : PROMPT_COMM_AGENT_MSG,
+             trig->relay ? PROMPT_IRC_FORMAT : "");
 
     snprintf(out, out_sz, PROMPT_SYSTEM_FMT,
         agent->name, agent->personality, agent->system_prompt_extra,
         agent->is_hub ? PROMPT_HUB_ROLE : "",
         builder_rules,
         trigger_type_str(trig_type),
-        trig_data ? trig_data : PROMPT_NO_DATA,
-        thread_id ? thread_id : "(none)",
+        thread_id && thread_id[0] ? thread_id : "(none)",
         comm_rules,
         objectives[0] ? objectives : PROMPT_NONE,
         agents_text[0] ? agents_text : PROMPT_NONE,
-        schedule,
-        memories,
+        schedule[0] ? schedule : PROMPT_NONE,
+        facts[0] ? facts : PROMPT_NONE,
+        memories && memories[0] ? memories : PROMPT_NONE,
         now
     );
+    free(memories);
+}
+
+/* ── Tool calls ─────────────────────────────────────────── */
+
+static int tool_offered(cJSON *tools, const char *name) {
+    cJSON *t;
+    cJSON_ArrayForEach(t, tools) {
+        const char *n = j_str(t, "name");
+        if (n && strcmp(n, name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Compact "key=value, ..." summary of tool arguments for IRC/TUI */
+static void summarize_args(cJSON *input, char *out, size_t out_sz) {
+    size_t off = 0;
+    out[0] = '\0';
+    cJSON *item;
+    cJSON_ArrayForEach(item, input) {
+        char val[96];
+        if (cJSON_IsString(item)) {
+            const char *s = item->valuestring;
+            if (strchr(s, '\n'))   /* multiline values (code): show the size */
+                snprintf(val, sizeof(val), "<%zu chars>", strlen(s));
+            else
+                snprintf(val, sizeof(val), "%.*s%s", utf8_prefix(s, 60), s,
+                         strlen(s) > 60 ? "..." : "");
+        } else if (cJSON_IsNumber(item)) {
+            snprintf(val, sizeof(val), "%g", item->valuedouble);
+        } else if (cJSON_IsBool(item)) {
+            snprintf(val, sizeof(val), "%s", cJSON_IsTrue(item) ? "true" : "false");
+        } else {
+            snprintf(val, sizeof(val), "{...}");
+        }
+        buf_appendf(out, out_sz, &off, "%s%s=%s", off ? ", " : "",
+                    item->string ? item->string : "?", val);
+    }
+}
+
+/* Count identical calls (same tool, same arguments) in this session.
+ * Returns 1 when the call exceeds `limit` and must not run again. */
+static int repeated_call(session_state_t *st, const char *name, cJSON *input, int limit) {
+    char *args = cJSON_PrintUnformatted(input);
+    uint64_t h = 1469598103934665603ULL;   /* FNV-1a */
+    for (const char *p = name; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    h *= 1099511628211ULL;                 /* separator */
+    for (const char *p = args ? args : ""; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    free(args);
+
+    for (int i = 0; i < st->n_calls; i++)
+        if (st->call_hash[i] == h)
+            return ++st->call_count[i] > limit;
+    if (st->n_calls < 64) {
+        st->call_hash[st->n_calls] = h;
+        st->call_count[st->n_calls++] = 1;
+    }
+    return 0;
+}
+
+static int is_requester(const trigger_info_t *trig, const char *name) {
+    for (int i = 0; name && i < trig->n_requesters; i++)
+        if (strcmp(trig->requesters[i], name) == 0)
+            return 1;
+    return 0;
+}
+
+static const char *run_tool(agent_ctx_t *agent, cJSON *tools, tool_call_t *call,
+                            session_state_t *st, const trigger_info_t *trig,
+                            const char *thread_id, char *out, size_t out_sz) {
+    cJSON *input = cJSON_Parse(call->input_json);
+    int tid = tool_find(call->name);
+    const char *result;
+
+    if (!tool_offered(tools, call->name)) {
+        size_t off = 0;
+        buf_appendf(out, out_sz, &off, PROMPT_UNKNOWN_TOOL, call->name);
+        cJSON *t;
+        cJSON_ArrayForEach(t, tools)
+            buf_appendf(out, out_sz, &off, " %s", j_str(t, "name"));
+        result = out;
+    } else if (!cJSON_IsObject(input)) {
+        snprintf(out, out_sz, PROMPT_BAD_ARGS, call->name);
+        result = out;
+    } else if (repeated_call(st, call->name, input,
+                             agent->is_builder && tid == TOOL_READ_FILE ? 1 : 2)) {
+        snprintf(out, out_sz, PROMPT_REPEAT_CALL, call->name);
+        st->blocked_repeats++;
+        result = out;
+    } else if (tid >= 0) {
+        const char *to = tid == TOOL_SEND_MESSAGE
+            ? messenger_resolve(agent->messenger, j_str(input, "to")) : NULL;
+        result = tool_check_args(tid, input, out, out_sz);
+        if (!result && is_requester(trig, to))
+            /* Answering the requester: marked as an answer, so it cannot
+             * start a new request (two agents would ping-pong) */
+            result = agent_message(agent, to, j_str(input, "content"), thread_id, 1,
+                                   out, out_sz);
+        else if (!result)
+            result = execute_tool(tid, input, agent, out, out_sz);
+        if (tid == TOOL_SEND_MESSAGE && !is_error(result)) {
+            st->sent_message = 1;
+            if (to && st->n_sent_to < 8)
+                snprintf(st->sent_to[st->n_sent_to++], sizeof(st->sent_to[0]), "%s", to);
+        }
+    } else {
+        result = plugin_execute(agent->plugins, call->name, input, 0, out, out_sz);
+        if (!result) {
+            snprintf(out, out_sz, "Error: plugin '%s' is no longer loaded", call->name);
+            result = out;
+        }
+    }
+    cJSON_Delete(input);
+    return result;
+}
+
+/* Small local models have small context windows: once the tool outputs in
+ * the history exceed the agent's budget, shrink the oldest ones. Only for
+ * OpenAI-compatible providers — Anthropic histories stay append-only. */
+static void trim_history(cJSON *messages, size_t budget) {
+    size_t total = 0;
+    cJSON *msg, *block;
+    cJSON_ArrayForEach(msg, messages)
+        cJSON_ArrayForEach(block, cJSON_GetObjectItem(msg, "content")) {
+            const char *c = j_str(block, "content");
+            if (c) total += strlen(c);
+        }
+
+    cJSON *newest = cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1);
+    cJSON_ArrayForEach(msg, messages) {
+        if (total <= budget || msg == newest) break;
+        cJSON_ArrayForEach(block, cJSON_GetObjectItem(msg, "content")) {
+            const char *c = j_str(block, "content");
+            size_t len = c ? strlen(c) : 0;
+            if (total <= budget || len <= 400) continue;
+            char shorter[400];
+            int keep = utf8_prefix(c, 200);
+            snprintf(shorter, sizeof(shorter), "%.*s" PROMPT_ELIDED,
+                     keep, c, len - (size_t)keep);
+            total -= len - strlen(shorter);
+            cJSON_ReplaceItemInObject(block, "content", cJSON_CreateString(shorter));
+        }
+    }
+}
+
+/* ── Session loop ───────────────────────────────────────── */
+
+static void add_user_text(cJSON *messages, const char *text) {
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "role", "user");
+    cJSON_AddStringToObject(msg, "content", text);
+    cJSON_AddItemToArray(messages, msg);
+}
+
+/* After a reply without tool calls: 1 = the session goes on (a nudge was
+ * queued), 0 = done, -1 = failed */
+static int after_text_reply(agent_ctx_t *agent, trigger_type_t trig_type,
+                            const trigger_info_t *trig, const char *thread_id,
+                            const char *text, session_state_t *st, cJSON *messages) {
+    if (agent->is_builder && !st->plugin_done) {
+        /* Weak models often print the plugin instead of calling create_plugin */
+        char name[64], *code = malloc(TC_BUF_XL);
+        if (code && builder_extract_code(text, name, sizeof(name), code, TC_BUF_XL)) {
+            log_info("[%s] Auto-extracted plugin '%s' from text", agent->name, name);
+            char action[160], result[TC_BUF_LG];
+            snprintf(action, sizeof(action), "auto-compiles '%s' from text", name);
+            irc_action(agent->irc, agent->name, action);
+            session_add_message(agent->sessions, thread_id, agent->name, "",
+                                action, MSG_TOOL_CALL);
+
+            cJSON *input = cJSON_CreateObject();
+            cJSON_AddStringToObject(input, "name", name);
+            cJSON_AddStringToObject(input, "code", code);
+            execute_tool(TOOL_CREATE_PLUGIN, input, agent, result, sizeof(result));
+            cJSON_Delete(input);
+            session_add_message(agent->sessions, thread_id, agent->name, "",
+                                result, MSG_TOOL_RESULT);
+            free(code);
+
+            if (!is_error(result)) {
+                st->plugin_done = 1;
+                snprintf(st->notice, sizeof(st->notice), "%s", result);
+                if (trig->relay)
+                    irc_reply(agent->irc, agent->name, result);
+                return 0;
+            }
+            if (!st->builder_retry_used) {
+                char retry[TC_BUF_LG];
+                snprintf(retry, sizeof(retry), PROMPT_BUILDER_AUTO_FAIL, result);
+                add_user_text(messages, retry);
+                st->builder_retry_used = 1;
+                return 1;
+            }
+        } else {
+            free(code);
+            /* Agents only write to the builder to get a plugin; the owner may
+             * just be chatting with it, unless a build is under way. */
+            if (trig_type != TRIG_AGENT_MSG && !st->plugin_failed)
+                return 0;
+            if (!st->builder_retry_used) {
+                add_user_text(messages, PROMPT_BUILDER_NUDGE);
+                st->builder_retry_used = 1;
+                return 1;
+            }
+        }
+        snprintf(st->notice, sizeof(st->notice),
+                 "Builder stalled: the plugin request ended without a working plugin.");
+        if (trig->relay)
+            irc_reply(agent->irc, agent->name, st->notice);
+        log_error("[%s] Builder stalled: ended with text-only reply", agent->name);
+        return -1;
+    }
+
+    /* Hub narrated a delegation without calling send_message */
+    if (agent->is_hub && st->listed_agents && !st->sent_message && !st->hub_retry_used) {
+        add_user_text(messages, PROMPT_HUB_NUDGE);
+        st->hub_retry_used = 1;
+        return 1;
+    }
+
+    if (!text[0] && !st->empty_retry_used) {
+        add_user_text(messages, PROMPT_EMPTY_NUDGE);
+        st->empty_retry_used = 1;
+        return 1;
+    }
+    return 0;
+}
+
+/* Requests from other agents always get an answer, even when a small
+ * model forgets send_message or the session fails. */
+static void deliver_answer(agent_ctx_t *agent, const trigger_info_t *trig,
+                           session_state_t *st, const char *thread_id,
+                           const char *answer, int failed) {
+    char fallback[160];
+    if (!st->notice[0] && (!answer || !answer[0])) {
+        snprintf(fallback, sizeof(fallback), failed ? PROMPT_FAILED_ANSWER : PROMPT_NO_ANSWER,
+                 agent->name);
+        answer = fallback;
+    }
+    size_t len = strlen(st->notice) + (answer ? strlen(answer) : 0) + 2;
+    char *msg = malloc(len);
+    if (!msg) return;
+    snprintf(msg, len, "%s%s%s", st->notice, st->notice[0] && answer ? "\n" : "",
+             answer ? answer : "");
+
+    for (int i = 0; i < trig->n_requesters; i++) {
+        int done = 0;
+        for (int j = 0; j < st->n_sent_to; j++)
+            done |= strcmp(st->sent_to[j], trig->requesters[i]) == 0;
+        if (done) continue;
+        char out[TC_BUF_SM];
+        agent_message(agent, trig->requesters[i], msg, thread_id, 1, out, sizeof(out));
+        session_add_message(agent->sessions, thread_id, agent->name,
+                            trig->requesters[i], msg, MSG_DELEGATION);
+    }
+    free(msg);
 }
 
 int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
-                      const char *trig_data, const char *thread_id,
-                      const char **all_agents, const char **all_specialties,
-                      int n_agents) {
+                      const char *trig_data, const char *thread_id) {
+    trigger_info_t trig;
+    parse_trigger(trig_type, trig_data, &trig);
+
     char *system_prompt = malloc(TC_BUF_HUGE);
-    agent_build_system_prompt(agent, trig_type, trig_data, thread_id,
-                              all_agents, all_specialties, n_agents,
-                              system_prompt, TC_BUF_HUGE);
+    char *result_buf = malloc(TC_BUF_XL);
+    char *user_text = render_trigger(trig_type, trig_data);
+    session_state_t *st = calloc(1, sizeof(*st));
+    if (!system_prompt || !result_buf || !user_text || !st) {
+        log_error("[%s] out of memory", agent->name);
+        free(system_prompt); free(result_buf); free(user_text); free(st);
+        return SESSION_FAILED;
+    }
+    build_system_prompt(agent, trig_type, &trig, thread_id, system_prompt, TC_BUF_HUGE);
 
     cJSON *tools = tools_to_json(agent->is_builder);
-
-    /* Add plugin tools */
     if (agent->plugins) {
         cJSON *plugin_tools = plugin_get_schemas(agent->plugins);
         cJSON *pt;
-        cJSON_ArrayForEach(pt, plugin_tools)
-            cJSON_AddItemToArray(tools, cJSON_Duplicate(pt, 1));
+        while ((pt = cJSON_DetachItemFromArray(plugin_tools, 0)) != NULL)
+            cJSON_AddItemToArray(tools, pt);
         cJSON_Delete(plugin_tools);
     }
 
-    /* Build initial messages */
     cJSON *messages = cJSON_CreateArray();
-    cJSON *user_msg = cJSON_CreateObject();
-    cJSON_AddStringToObject(user_msg, "role", "user");
-    cJSON_AddStringToObject(user_msg, "content",
-        trig_data ? trig_data : PROMPT_STARTUP_FALLBACK);
-    cJSON_AddItemToArray(messages, user_msg);
+    add_user_text(messages, user_text);
+    free(user_text);
 
     int max_turns = agent->max_turns > 0 ? agent->max_turns : TC_MAX_TURNS;
-    int builder_retry_used = 0;
-    int builder_plugin_completed = 0;
-    int builder_sent_message = 0;
-    int hub_called_list_agents = 0;
-    int hub_retry_used = 0;
-    char builder_success_result[TC_BUF_LG] = "";
-    char builder_read_file_seen[16][TC_BUF_SM];
-    int n_builder_read_file_seen = 0;
+    int trim = agent->history_budget > 0 &&
+               strcmp(agent->provider.provider_type, "anthropic") != 0;
+    int outcome = SESSION_COMPLETED;
+    char *answer = NULL;   /* last text reply */
+    int turn;
 
     log_info("[%s] === SESSION (trigger: %s, thread: %s, model: %s) ===",
              agent->name, trigger_type_str(trig_type),
-             thread_id ? thread_id : "-", agent->provider.model);
+             thread_id && thread_id[0] ? thread_id : "-", agent->provider.model);
 
-    int outcome = SESSION_COMPLETED;
-
-    for (int turn = 0; turn < max_turns; turn++) {
-        if (agent->abort_flag) {
-            log_info("[%s] Aborted", agent->name);
-            outcome = SESSION_ABORTED;
-            break;
-        }
-
-        /* Call LLM */
+    for (turn = 0; turn < max_turns; turn++) {
         llm_response_t resp;
         if (llm_call(&agent->provider, system_prompt, messages, tools, &resp) != 0) {
-            log_error("[%s] LLM call failed", agent->name);
+            snprintf(st->notice, sizeof(st->notice), PROMPT_LLM_ERROR, resp.error);
+            irc_reply(agent->irc, agent->name, st->notice);
+            llm_response_free(&resp);
             outcome = SESSION_FAILED;
             break;
         }
 
-        /* Append assistant message for conversation continuity */
-        cJSON *assistant = cJSON_CreateObject();
-        cJSON_AddStringToObject(assistant, "role", "assistant");
-
-        /* Collect text */
-        char *text_combined = calloc(1, TC_BUF_HUGE);
+        /* Log text blocks; relay replies (not thinking) to the owner */
+        size_t text_len = 0;
         for (int i = 0; i < resp.n_text; i++) {
-            if (resp.text_blocks[i].text) {
-                size_t cur = strlen(text_combined);
-                size_t left = TC_BUF_HUGE - cur - 1;
-                if (left == 0) break;
-                if (cur > 0) {
-                    strncat(text_combined, "\n", left);
-                    left = TC_BUF_HUGE - strlen(text_combined) - 1;
-                }
-                strncat(text_combined, resp.text_blocks[i].text, left);
+            text_block_t *b = &resp.text_blocks[i];
+            int thinking = strcmp(b->type, "thinking") == 0;
+            session_add_message(agent->sessions, thread_id, agent->name, "",
+                                b->text, thinking ? MSG_THINKING : MSG_TEXT);
+            if (thinking) continue;
+            text_len += strlen(b->text) + 1;
+            if (trig.relay)
+                irc_reply(agent->irc, agent->name, b->text);
+        }
+        char *text = calloc(1, text_len + 1);
+        for (int i = 0; text && i < resp.n_text; i++)
+            if (strcmp(resp.text_blocks[i].type, "thinking") != 0) {
+                if (text[0]) strcat(text, "\n");
+                strcat(text, resp.text_blocks[i].text);
             }
+        if (text && text[0]) {
+            free(answer);
+            answer = strdup(text);
         }
 
-        /* Log text blocks to session */
-        for (int i = 0; i < resp.n_text; i++) {
-            if (!resp.text_blocks[i].text || !resp.text_blocks[i].text[0]) continue;
-            msg_type_t mt = (strcmp(resp.text_blocks[i].type, "thinking") == 0)
-                            ? MSG_THINKING : MSG_TEXT;
-            if (thread_id && agent->sessions)
-                session_add_message(agent->sessions, thread_id,
-                                    agent->name, "", resp.text_blocks[i].text, mt);
-
-            /* Echo text responses to IRC/TUI (not agent_msg -- those are
-               shown via send_message in tools.c to avoid duplicates) */
-            if (mt == MSG_TEXT && agent->irc &&
-                (trig_type == TRIG_IRC || trig_type == TRIG_SCHEDULE ||
-                 trig_type == TRIG_SOCKET))
-                irc_reply(agent->irc, agent->is_hub ? NULL : agent->name,
-                           resp.text_blocks[i].text);
-        }
-
-        if (resp.n_tools > 0) {
-            /* Build Anthropic-style assistant content for the conversation */
-            cJSON *content_arr = cJSON_CreateArray();
-
-            if (text_combined[0]) {
-                cJSON *tb = cJSON_CreateObject();
-                cJSON_AddStringToObject(tb, "type", "text");
-                cJSON_AddStringToObject(tb, "text", text_combined);
-                cJSON_AddItemToArray(content_arr, tb);
-            }
-
-            for (int i = 0; i < resp.n_tools; i++) {
-                cJSON *tu = cJSON_CreateObject();
-                cJSON_AddStringToObject(tu, "type", "tool_use");
-                cJSON_AddStringToObject(tu, "id", resp.tool_calls[i].id);
-                cJSON_AddStringToObject(tu, "name", resp.tool_calls[i].name);
-                cJSON *input = cJSON_Parse(resp.tool_calls[i].input_json);
-                cJSON_AddItemToObject(tu, "input", input ? input : cJSON_CreateObject());
-                cJSON_AddItemToArray(content_arr, tu);
-            }
-
-            cJSON_AddItemToObject(assistant, "content", content_arr);
+        /* Replay the assistant turn exactly as the provider returned it */
+        if (cJSON_GetArraySize(resp.content) > 0) {
+            cJSON *assistant = cJSON_CreateObject();
+            cJSON_AddStringToObject(assistant, "role", "assistant");
+            cJSON_AddItemToObject(assistant, "content", resp.content);
+            resp.content = NULL;
             cJSON_AddItemToArray(messages, assistant);
+        }
 
-            /* Execute tools and collect results */
-            cJSON *tool_results_msg = cJSON_CreateObject();
-            cJSON_AddStringToObject(tool_results_msg, "role", "user");
-            cJSON *results_arr = cJSON_CreateArray();
-
+        int next = 0;   /* 1: call the model again */
+        if (resp.n_tools > 0) {
+            cJSON *results = cJSON_CreateArray();
             for (int i = 0; i < resp.n_tools; i++) {
-                log_info("[%s] Tool: %s", agent->name, resp.tool_calls[i].name);
+                tool_call_t *call = &resp.tool_calls[i];
+                log_info("[%s] Tool: %s", agent->name, call->name);
 
-                /* Show tool call on IRC/TUI as ACTION */
-                if (agent->irc) {
-                    char action[384];
-                    /* Build compact param summary from input JSON */
-                    char params[256] = "";
-                    cJSON *inp = cJSON_Parse(resp.tool_calls[i].input_json);
-                    if (inp) {
-                        int poff = 0;
-                        cJSON *item;
-                        cJSON_ArrayForEach(item, inp) {
-                            const char *k = item->string;
-                            char val[80];
-                            if (cJSON_IsString(item)) {
-                                /* Skip multiline values (e.g. code), show length */
-                                if (strchr(item->valuestring, '\n')) {
-                                    snprintf(val, sizeof(val), "<%d chars>",
-                                             (int)strlen(item->valuestring));
-                                } else {
-                                    snprintf(val, sizeof(val), "%.60s%s",
-                                             item->valuestring,
-                                             strlen(item->valuestring) > 60 ? "..." : "");
-                                }
-                            } else if (cJSON_IsNumber(item)) {
-                                snprintf(val, sizeof(val), "%g", item->valuedouble);
-                            } else if (cJSON_IsBool(item)) {
-                                snprintf(val, sizeof(val), "%s",
-                                         cJSON_IsTrue(item) ? "true" : "false");
-                            } else {
-                                snprintf(val, sizeof(val), "{...}");
-                            }
-                            int wrote = snprintf(params + poff, sizeof(params) - poff,
-                                                 "%s%s=%s", poff ? ", " : "", k, val);
-                            poff += wrote;
-                            if (poff >= (int)sizeof(params) - 1) break;
-                        }
-                        cJSON_Delete(inp);
-                    }
-                    snprintf(action, sizeof(action), "calls %s(%s)",
-                             resp.tool_calls[i].name, params);
-                    irc_action(agent->irc, agent->name, action);
-                }
-
-                /* Log tool call to session */
-                if (thread_id && agent->sessions) {
-                    char call_summary[TC_BUF_SM];
-                    snprintf(call_summary, sizeof(call_summary), "%s(%.150s)",
-                             resp.tool_calls[i].name, resp.tool_calls[i].input_json);
-                    session_add_message(agent->sessions, thread_id,
-                                        agent->name, "", call_summary, MSG_TOOL_CALL);
-                }
-
-                cJSON *input = cJSON_Parse(resp.tool_calls[i].input_json);
-                char result_buf[TC_BUF_XL];
-
-                int tid = find_tool(resp.tool_calls[i].name);
-                const char *result;
-
-                if (agent->is_builder &&
-                    strcmp(resp.tool_calls[i].name, "read_file") == 0 &&
-                    builder_read_file_duplicate(resp.tool_calls[i].input_json,
-                                                builder_read_file_seen,
-                                                n_builder_read_file_seen)) {
-                    snprintf(result_buf, sizeof(result_buf),
-                             "Already read this file in the current builder "
-                             "session. Reuse the earlier content instead of "
-                             "calling read_file again.");
-                    result = result_buf;
-                } else if (tid >= 0) {
-                    result = execute_tool(tid, input, agent, result_buf, sizeof(result_buf));
-                } else if (agent->plugins) {
-                    /* Try plugins */
-                    result = plugin_execute(agent->plugins, resp.tool_calls[i].name,
-                                            input, result_buf, sizeof(result_buf));
-                    if (!result)
-                        snprintf(result_buf, sizeof(result_buf), "Unknown tool: %s",
-                                 resp.tool_calls[i].name);
-                    result = result ? result : result_buf;
-                } else {
-                    snprintf(result_buf, sizeof(result_buf), "Unknown tool: %s",
-                             resp.tool_calls[i].name);
-                    result = result_buf;
-                }
-
+                cJSON *input = cJSON_Parse(call->input_json);
+                char params[256], line[400];
+                summarize_args(input, params, sizeof(params));
                 cJSON_Delete(input);
+                snprintf(line, sizeof(line), "calls %s(%s)", call->name, params);
+                irc_action(agent->irc, agent->name, line);
+                session_add_message(agent->sessions, thread_id, agent->name, "",
+                                    line + 6, MSG_TOOL_CALL);
 
-                if (agent->is_builder &&
-                    strcmp(resp.tool_calls[i].name, "read_file") == 0 &&
-                    !builder_read_file_duplicate(resp.tool_calls[i].input_json,
-                                                 builder_read_file_seen,
-                                                 n_builder_read_file_seen))
-                    builder_mark_read_file(resp.tool_calls[i].input_json,
-                                           builder_read_file_seen,
-                                           &n_builder_read_file_seen);
+                const char *result = run_tool(agent, tools, call, st, &trig, thread_id,
+                                              result_buf, TC_BUF_XL);
+                session_add_message(agent->sessions, thread_id, agent->name, "",
+                                    result, MSG_TOOL_RESULT);
 
-                /* Log result to session */
-                if (thread_id && agent->sessions)
-                    session_add_message(agent->sessions, thread_id,
-                                        agent->name, "", result, MSG_TOOL_RESULT);
-
-                if (strcmp(resp.tool_calls[i].name, "create_plugin") == 0 &&
-                    builder_create_plugin_succeeded(result)) {
-                    builder_plugin_completed = 1;
-                    snprintf(builder_success_result, sizeof(builder_success_result),
-                             "%s", result);
+                int ok = !is_error(result);
+                if (strcmp(call->name, "create_plugin") == 0) {
+                    st->plugin_failed = !ok;
+                    if (ok) {
+                        st->plugin_done = 1;
+                        snprintf(st->notice, sizeof(st->notice), "%s", result);
+                    }
                 }
-                if (strcmp(resp.tool_calls[i].name, "send_message") == 0)
-                    builder_sent_message = 1;
-                if (strcmp(resp.tool_calls[i].name, "list_agents") == 0)
-                    hub_called_list_agents = 1;
+                if (strcmp(call->name, "list_agents") == 0)
+                    st->listed_agents = 1;
 
                 cJSON *tr = cJSON_CreateObject();
                 cJSON_AddStringToObject(tr, "type", "tool_result");
-                cJSON_AddStringToObject(tr, "tool_use_id", resp.tool_calls[i].id);
+                cJSON_AddStringToObject(tr, "tool_use_id", call->id);
                 cJSON_AddStringToObject(tr, "content", result);
-                cJSON_AddItemToArray(results_arr, tr);
+                if (!ok)
+                    cJSON_AddBoolToObject(tr, "is_error", 1);
+                cJSON_AddItemToArray(results, tr);
             }
+            cJSON *tool_msg = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool_msg, "role", "user");
+            cJSON_AddItemToObject(tool_msg, "content", results);
+            cJSON_AddItemToArray(messages, tool_msg);
+            if (trim)
+                trim_history(messages, (size_t)agent->history_budget);
 
-            cJSON_AddItemToObject(tool_results_msg, "content", results_arr);
-            cJSON_AddItemToArray(messages, tool_results_msg);
-
-        } else if (strcmp(resp.stop_reason, "end_turn") == 0) {
-            cJSON_AddStringToObject(assistant, "content", text_combined);
-            cJSON_AddItemToArray(messages, assistant);
-
-            if (agent->is_builder && trig_type == TRIG_AGENT_MSG) {
-                if (builder_plugin_completed && !builder_sent_message) {
-                    builder_notify_success(agent, thread_id, trig_data,
-                                           builder_success_result);
-                } else if (!builder_plugin_completed && !builder_sent_message) {
-                    /* Try auto-extracting plugin code from text */
-                    char ext_name[64], ext_code[TC_BUF_XL];
-                    int extracted = builder_extract_code(text_combined,
-                                        ext_name, sizeof(ext_name),
-                                        ext_code, sizeof(ext_code));
-
-                    if (extracted) {
-                        log_info("[%s] Auto-extracted plugin '%s' from text",
-                                 agent->name, ext_name);
-                        if (agent->irc) {
-                            char action[256];
-                            snprintf(action, sizeof(action),
-                                     "auto-compiles '%s' from text", ext_name);
-                            irc_action(agent->irc, agent->name, action);
-                        }
-                        if (thread_id && agent->sessions) {
-                            char cs[256];
-                            snprintf(cs, sizeof(cs),
-                                     "create_plugin(name=%s, auto-extracted)",
-                                     ext_name);
-                            session_add_message(agent->sessions, thread_id,
-                                                agent->name, "", cs,
-                                                MSG_TOOL_CALL);
-                        }
-
-                        cJSON *auto_input = cJSON_CreateObject();
-                        cJSON_AddStringToObject(auto_input, "name", ext_name);
-                        cJSON_AddStringToObject(auto_input, "code", ext_code);
-                        char auto_result[TC_BUF_LG];
-                        execute_tool(TOOL_CREATE_PLUGIN, auto_input, agent,
-                                     auto_result, sizeof(auto_result));
-                        cJSON_Delete(auto_input);
-
-                        if (thread_id && agent->sessions)
-                            session_add_message(agent->sessions, thread_id,
-                                                agent->name, "",
-                                                auto_result, MSG_TOOL_RESULT);
-
-                        if (builder_create_plugin_succeeded(auto_result)) {
-                            builder_plugin_completed = 1;
-                            snprintf(builder_success_result,
-                                     sizeof(builder_success_result),
-                                     "%s", auto_result);
-                            builder_notify_success(agent, thread_id,
-                                                   trig_data,
-                                                   builder_success_result);
-                            free(text_combined);
-                            llm_response_free(&resp);
-                            break;
-                        }
-
-                        /* Compilation failed — inject error for retry */
-                        if (!builder_retry_used) {
-                            cJSON *retry = cJSON_CreateObject();
-                            cJSON_AddStringToObject(retry, "role", "user");
-                            char rbuf[TC_BUF_LG];
-                            snprintf(rbuf, sizeof(rbuf),
-                                PROMPT_BUILDER_AUTO_FAIL, auto_result);
-                            cJSON_AddStringToObject(retry, "content", rbuf);
-                            cJSON_AddItemToArray(messages, retry);
-                            builder_retry_used = 1;
-                            free(text_combined);
-                            llm_response_free(&resp);
-                            continue;
-                        }
-                    } else if (!builder_retry_used) {
-                        cJSON *nudge = cJSON_CreateObject();
-                        cJSON_AddStringToObject(nudge, "role", "user");
-                        cJSON_AddStringToObject(nudge, "content",
-                            PROMPT_BUILDER_NUDGE);
-                        cJSON_AddItemToArray(messages, nudge);
-                        builder_retry_used = 1;
-                        free(text_combined);
-                        llm_response_free(&resp);
-                        continue;
-                    }
-
-                    builder_notify_stall(agent, thread_id, trig_data,
-                                         text_combined);
-                    log_error("[%s] Builder stalled: ended with text-only reply",
-                              agent->name);
-                    outcome = SESSION_FAILED;
-                    free(text_combined);
-                    llm_response_free(&resp);
-                    break;
-                }
+            next = 1;
+            if (st->blocked_repeats >= 3) {
+                snprintf(st->notice, sizeof(st->notice), "%s", PROMPT_STUCK);
+                irc_reply(agent->irc, agent->name, PROMPT_STUCK);
+                log_warn("[%s] stuck repeating tool calls, session stopped", agent->name);
+                outcome = SESSION_FAILED;
+                next = 0;
             }
-
-            /* Hub agent narrated delegation without calling send_message */
-            if (agent->is_hub && hub_called_list_agents &&
-                !builder_sent_message && !hub_retry_used) {
-                cJSON *nudge = cJSON_CreateObject();
-                cJSON_AddStringToObject(nudge, "role", "user");
-                cJSON_AddStringToObject(nudge, "content",
-                    PROMPT_HUB_NUDGE);
-                cJSON_AddItemToArray(messages, nudge);
-                hub_retry_used = 1;
-                free(text_combined);
-                llm_response_free(&resp);
-                continue;
-            }
-
-            free(text_combined);
-            llm_response_free(&resp);
-            break;
+        } else if (strcmp(resp.stop_reason, "refusal") == 0) {
+            if (trig.relay) irc_reply(agent->irc, agent->name, PROMPT_REFUSED);
+            snprintf(st->notice, sizeof(st->notice), "%s", PROMPT_REFUSED);
+            log_warn("[%s] model refused", agent->name);
         } else {
-            cJSON_AddStringToObject(assistant, "content", text_combined);
-            cJSON_AddItemToArray(messages, assistant);
-            log_warn("[%s] Unexpected stop_reason: %s", agent->name, resp.stop_reason);
-            free(text_combined);
-            llm_response_free(&resp);
-            break;
+            next = after_text_reply(agent, trig_type, &trig, thread_id,
+                                    text ? text : "", st, messages);
+            if (next < 0) {
+                outcome = SESSION_FAILED;
+                next = 0;
+            }
         }
 
-        free(text_combined);
+        free(text);
         llm_response_free(&resp);
+        if (!next) break;
     }
 
+    if (turn == max_turns) {
+        snprintf(st->notice, sizeof(st->notice), PROMPT_MAX_TURNS, max_turns);
+        irc_reply(agent->irc, agent->name, st->notice);
+        log_warn("[%s] max_turns (%d) reached", agent->name, max_turns);
+    }
+
+    if (trig.n_requesters)
+        deliver_answer(agent, &trig, st, thread_id, answer, outcome != SESSION_COMPLETED);
+
+    free(answer);
     cJSON_Delete(messages);
     cJSON_Delete(tools);
     free(system_prompt);
+    free(result_buf);
+    free(st);
 
     log_info("[%s] === END ===", agent->name);
     return outcome;

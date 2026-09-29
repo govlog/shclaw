@@ -2,12 +2,14 @@
  * ca.c — TLS CA trust anchor loading from PEM files
  *
  * Cascade:
- *   1. System CA bundle paths
- *   2. data/cacert.pem
+ *   1. System CA bundle files
+ *   2. <data_dir>/cacert.pem
+ *   3. System certificate directories (one PEM per file, as on NetBSD)
  */
 
 #include "../include/tc.h"
 #include <bearssl.h>
+#include <dirent.h>
 
 static br_x509_trust_anchor *g_anchors = NULL;
 static size_t g_anchor_count = 0;
@@ -18,6 +20,13 @@ static const char *CA_PATHS[] = {
     "/etc/pki/tls/certs/ca-bundle.crt",
     "/etc/ssl/cert.pem",
     "/etc/openssl/certs/ca-certificates.crt", /* NetBSD */
+    "/usr/local/share/certs/ca-root-nss.crt", /* FreeBSD */
+    NULL,
+};
+
+static const char *CA_DIRS[] = {
+    "/etc/openssl/certs",   /* NetBSD */
+    "/etc/ssl/certs",
     NULL,
 };
 
@@ -186,44 +195,45 @@ static int load_pem_file(const char *path) {
     return (g_anchor_count > before) ? 0 : -1;
 }
 
-int ca_init(void) {
-    for (int i = 0; CA_PATHS[i]; i++) {
-        if (file_exists(CA_PATHS[i])) {
-            if (load_pem_file(CA_PATHS[i]) == 0) {
-                log_info("CA: loaded %zu trust anchors from %s",
-                         g_anchor_count, CA_PATHS[i]);
-                return 0;
-            }
-        }
+/* Every *.pem, *.crt and *.0 file of a certificate directory */
+static int load_pem_dir(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+    size_t before = g_anchor_count;
+    struct dirent *de;
+    while ((de = readdir(dir))) {
+        const char *ext = strrchr(de->d_name, '.');
+        if (!ext || (strcmp(ext, ".pem") && strcmp(ext, ".crt") && strcmp(ext, ".0")))
+            continue;
+        char file[4200];
+        snprintf(file, sizeof(file), "%s/%s", path, de->d_name);
+        load_pem_file(file);
     }
-
-    if (file_exists("data/cacert.pem")) {
-        if (load_pem_file("data/cacert.pem") == 0) {
-            log_info("CA: loaded %zu trust anchors from data/cacert.pem",
-                     g_anchor_count);
-            return 0;
-        }
-    }
-
-    log_error("CA: no trust anchors found! HTTPS will fail.");
-    log_error("CA: place a PEM bundle at data/cacert.pem or install ca-certificates");
-    return -1;
+    closedir(dir);
+    return g_anchor_count > before ? 0 : -1;
 }
 
-void ca_cleanup(void) {
-    for (size_t i = 0; i < g_anchor_count; i++) {
-        free(g_anchors[i].dn.data);
-        if (g_anchors[i].pkey.key_type == BR_KEYTYPE_RSA) {
-            free(g_anchors[i].pkey.key.rsa.n);
-            free(g_anchors[i].pkey.key.rsa.e);
-        } else if (g_anchors[i].pkey.key_type == BR_KEYTYPE_EC) {
-            free(g_anchors[i].pkey.key.ec.q);
-        }
+int ca_init(const char *data_dir) {
+    char own[4200];
+    snprintf(own, sizeof(own), "%s/cacert.pem", data_dir);
+
+    const char *found = NULL;
+    for (int i = 0; CA_PATHS[i] && !found; i++)
+        if (load_pem_file(CA_PATHS[i]) == 0)
+            found = CA_PATHS[i];
+    if (!found && load_pem_file(own) == 0)
+        found = own;
+    for (int i = 0; CA_DIRS[i] && !found; i++)
+        if (load_pem_dir(CA_DIRS[i]) == 0)
+            found = CA_DIRS[i];
+
+    if (found) {
+        log_info("CA: loaded %zu trust anchors from %s", g_anchor_count, found);
+        return 0;
     }
-    free(g_anchors);
-    g_anchors = NULL;
-    g_anchor_count = 0;
-    g_anchor_cap = 0;
+    log_error("CA: no trust anchors found! HTTPS will fail.");
+    log_error("CA: place a PEM bundle at %s or install ca-certificates", own);
+    return -1;
 }
 
 br_x509_trust_anchor *ca_get_anchors(size_t *count) {

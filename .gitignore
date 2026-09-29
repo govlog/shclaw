@@ -3,6 +3,7 @@ reset.sh
 shclaw
 shclaw.com
 shclaw.com.dbg
+shclaw.com.bak
 
 # Build artifacts
 build/
@@ -25,10 +26,10 @@ vendor/tcc/
 vendor/cjson/
 vendor/cosmo/
 vendor/smolbsd/
+vendor/*.tmp/
 
 # Docker/smolBSD build copies
 docker/shclaw
-smolbsd/shclaw.com
 
 # Editor / OS
 *.swp

@@ -4,8 +4,9 @@
 # and a multi-agent agentic loop.
 #
 #   make              Show help
-#   make musl         Build static Linux binary (~515K)
-#   make cosmo        Build cross-platform APE binary (~955K)
+#   make musl         Build static Linux binary (~530K)
+#   make cosmo        Build cross-platform APE binary (~970K)
+#   make check        Run the behaviour checks (check-cosmo: with cosmocc)
 #   make install      Install to PREFIX (creates instance directory structure)
 #   make docker-image Build Docker image from pre-compiled binary
 #   make smolbsd      Build smolBSD microVM service
@@ -32,7 +33,9 @@ endif
 # musl toolchain
 # -------------------------------------------------------------------
 MUSL_CC      = musl-gcc
-MUSL_CFLAGS  = -std=gnu11 -Os -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
+# Function/data sections + --gc-sections drop unused code (~25K smaller)
+SECTIONS     = -ffunction-sections -fdata-sections
+MUSL_CFLAGS  = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
                -I include \
                -I vendor/bearssl/inc \
                -I vendor/tcc \
@@ -48,7 +51,7 @@ MUSL_CFLAGS  = -std=gnu11 -Os -Wall -Wextra -Wno-unused-parameter -Wno-format-tr
                -Wformat=2 -Wformat-security \
                -Wimplicit-fallthrough \
                $(EXTRA_CFLAGS)
-MUSL_LDFLAGS = $(STATIC) -L vendor/bearssl/build -L vendor/tcc \
+MUSL_LDFLAGS = $(STATIC) -Wl,--gc-sections -L vendor/bearssl/build -L vendor/tcc \
                -Wl,-z,relro,-z,now \
                -Wl,-z,noexecstack \
                -Wl,-z,separate-code
@@ -61,7 +64,7 @@ MUSL_BIN     = shclaw
 COSMO_DIR    = ./vendor/cosmo
 COSMO_CC     = $(COSMO_DIR)/bin/x86_64-unknown-cosmo-cc
 COSMO_AR     = $(COSMO_DIR)/bin/x86_64-unknown-cosmo-ar
-COSMO_CFLAGS = -std=gnu11 -Os -Wall -Wextra \
+COSMO_CFLAGS = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra \
                -Wno-unused-parameter -Wno-format-truncation \
                -Wno-missing-field-initializers \
                -I include \
@@ -69,7 +72,7 @@ COSMO_CFLAGS = -std=gnu11 -Os -Wall -Wextra \
                -I vendor/tcc \
                -I vendor/cjson \
                $(EXTRA_CFLAGS)
-COSMO_LDFLAGS = -s -L vendor/bearssl/build -L vendor/tcc
+COSMO_LDFLAGS = -s -Wl,--gc-sections -L vendor/bearssl/build -L vendor/tcc
 COSMO_LIBS    = -lbearssl -ltcc -lpthread -lm
 COSMO_BIN     = shclaw.com
 
@@ -87,7 +90,7 @@ TCC_A     = vendor/tcc/libtcc.a
 # -------------------------------------------------------------------
 # Phony targets
 # -------------------------------------------------------------------
-.PHONY: help musl cosmo clean install uninstall docker-image smolbsd
+.PHONY: help musl cosmo check check-cosmo clean install uninstall docker-image smolbsd
 
 # -------------------------------------------------------------------
 # Default: help
@@ -95,9 +98,10 @@ TCC_A     = vendor/tcc/libtcc.a
 help:
 	@echo "shclaw — bare metal multi-agent AI daemon"
 	@echo ""
-	@echo "  make musl           Build static Linux binary (~515K)"
-	@echo "  make cosmo          Build multi-platform binary (~955K)"
+	@echo "  make musl           Build static Linux binary (~530K)"
+	@echo "  make cosmo          Build multi-platform binary (~970K)"
 	@echo "                      Runs on Linux/NetBSD/FreeBSD/OpenBSD (x86_64)"
+	@echo "  make check          Run tests/check.c (check-cosmo: same with cosmocc)"
 	@echo "  make install        Install to PREFIX (default: /opt/shclaw)"
 	@echo "  make docker-image   Build Docker image (requires: make musl first)"
 	@echo "  make smolbsd        Build smolBSD service (requires: make cosmo first)"
@@ -133,7 +137,7 @@ vendor/bearssl/build/libbearssl.a.musl: vendor/bearssl/Makefile
 	@# Clean cosmo-built libs if switching toolchains
 	@rm -f vendor/bearssl/build/libbearssl.a.cosmo
 	$(MAKE) -C vendor/bearssl clean 2>/dev/null || true
-	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) CFLAGS="-fPIC -Os" -j$$(nproc)
+	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) CFLAGS="-fPIC -Os $(SECTIONS)" -j$$(nproc)
 	@touch $@
 
 vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
@@ -141,14 +145,15 @@ vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
 	cd vendor/tcc && ./configure --cc=$(MUSL_CC)
 	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) \
-		CFLAGS="-Wall -Os -Wdeclaration-after-statement -Wno-unused-result" -j$$(nproc)
+		CFLAGS="-Wall -Os $(SECTIONS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(nproc)
 	@touch $@
 
 # -------------------------------------------------------------------
 # Vendor: build libraries (cosmo)
 # -------------------------------------------------------------------
 vendor/tcc/.cosmo-patched: vendor/tcc/Makefile patches/tcc-cosmo.patch
-	cd vendor/tcc && patch -p1 -N < ../../patches/tcc-cosmo.patch || true
+	cd vendor/tcc && { git apply -R --check ../../patches/tcc-cosmo.patch 2>/dev/null || \
+		git apply ../../patches/tcc-cosmo.patch; }
 	@touch $@
 
 vendor/bearssl/build/libbearssl.a.cosmo: vendor/bearssl/Makefile $(COSMO_DIR)/bin/cosmocc
@@ -158,7 +163,7 @@ vendor/bearssl/build/libbearssl.a.cosmo: vendor/bearssl/Makefile $(COSMO_DIR)/bi
 	$(MAKE) -C vendor/bearssl \
 		CC="$(abspath $(COSMO_CC))" \
 		AR="$(abspath $(COSMO_AR))" \
-		CFLAGS="-Os" \
+		CFLAGS="-Os $(SECTIONS)" \
 		DLL=no TOOLS=no TESTS=no \
 		-j$$(nproc)
 	@touch $@
@@ -170,7 +175,7 @@ vendor/tcc/libtcc.a.cosmo: vendor/tcc/.cosmo-patched $(COSMO_DIR)/bin/cosmocc
 	$(MAKE) -C vendor/tcc libtcc.a \
 		CC="$(abspath $(COSMO_CC))" \
 		AR="$(abspath $(COSMO_AR))" \
-		CFLAGS="-Wall -Os -Wdeclaration-after-statement -Wno-unused-result" \
+		CFLAGS="-Wall -Os $(SECTIONS) -Wdeclaration-after-statement -Wno-unused-result" \
 		-j$$(nproc)
 	@touch $@
 
@@ -184,7 +189,7 @@ $(MUSL_BIN): $(MUSL_OBJS) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libt
 	strip -s $@
 	@echo "==> Built $(MUSL_BIN) ($$(du -h $(MUSL_BIN) | cut -f1))"
 
-build/%.o: src/%.c include/tc.h vendor/cjson/cJSON.c | build
+build/%.o: src/%.c include/tc.h include/prompt.h vendor/cjson/cJSON.c | build
 	$(MUSL_CC) $(MUSL_CFLAGS) -c -o $@ $<
 
 build/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h | build
@@ -205,7 +210,7 @@ $(COSMO_BIN): $(COSMO_OBJS) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/l
 	@echo "==> Built $(COSMO_BIN) ($$(du -h $(COSMO_BIN) | cut -f1))"
 	@echo "    Runs on: Linux, NetBSD, FreeBSD, OpenBSD (x86_64)"
 
-build-cosmo/%.o: src/%.c include/tc.h vendor/cjson/cJSON.c $(COSMO_DIR)/bin/cosmocc | build-cosmo
+build-cosmo/%.o: src/%.c include/tc.h include/prompt.h vendor/cjson/cJSON.c $(COSMO_DIR)/bin/cosmocc | build-cosmo
 	$(COSMO_CC) $(COSMO_CFLAGS) -c -o $@ $<
 
 build-cosmo/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h $(COSMO_DIR)/bin/cosmocc | build-cosmo
@@ -213,6 +218,20 @@ build-cosmo/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h $(COSMO_DIR)/bin/
 
 build-cosmo:
 	mkdir -p build-cosmo
+
+# -------------------------------------------------------------------
+# Checks: tests/check.c linked with everything but main.o and daemon.o
+# -------------------------------------------------------------------
+CHECK_MUSL  = $(filter-out build/main.o build/daemon.o,$(MUSL_OBJS))
+CHECK_COSMO = $(filter-out build-cosmo/main.o build-cosmo/daemon.o,$(COSMO_OBJS))
+
+check: $(CHECK_MUSL) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.musl
+	$(MUSL_CC) $(MUSL_CFLAGS) $(MUSL_LDFLAGS) -o build/check tests/check.c $(CHECK_MUSL) $(MUSL_LIBS)
+	./build/check
+
+check-cosmo: $(CHECK_COSMO) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/libtcc.a.cosmo
+	$(COSMO_CC) $(COSMO_CFLAGS) $(COSMO_LDFLAGS) -o build-cosmo/check tests/check.c $(CHECK_COSMO) $(COSMO_LIBS)
+	./build-cosmo/check
 
 # -------------------------------------------------------------------
 # Install (creates instance directory structure at PREFIX)
@@ -229,6 +248,7 @@ install:
 	install -d $(PREFIX)/logs
 	install -m 755 $(MUSL_BIN) $(PREFIX)/bin/$(MUSL_BIN)
 	install -m 644 include/tc_plugin.h $(PREFIX)/include/tc_plugin.h
+	install -m 644 plugins/_template.c $(PREFIX)/plugins/_template.c
 	@for f in etc/config.ini.example etc/agents/*.ini.example; do \
 		[ -f "$$f" ] && install -m 644 "$$f" "$(PREFIX)/$$f" || true; \
 	done
@@ -239,7 +259,7 @@ install:
 	@echo "    etc/config.ini.example"
 	@echo "    etc/agents/*.ini.example"
 	@echo "    include/tc_plugin.h"
-	@echo "    plugins/"
+	@echo "    plugins/_template.c"
 	@echo "    data/"
 	@echo "    logs/"
 	@echo ""
@@ -264,7 +284,7 @@ docker-image: $(MUSL_BIN)
 	@echo "Docker image built: shclaw"
 	@echo ""
 	@echo "Run:"
-	@echo "  docker run -v /path/to/instance:/app/instance shclaw"
+	@echo "  docker run --user \"\$$(id -u):\$$(id -g)\" -v /path/to/instance:/app/instance shclaw"
 	@echo ""
 	@echo "Instance directory must contain etc/config.ini"
 
@@ -272,6 +292,7 @@ docker-image: $(MUSL_BIN)
 # smolBSD microVM service
 # -------------------------------------------------------------------
 SMOLBSD_DIR = vendor/smolbsd
+SMOLBSD_IMG = shclaw-amd64:latest
 AGENT_DIR ?=
 
 $(SMOLBSD_DIR)/Makefile:
@@ -290,17 +311,13 @@ smolbsd: $(COSMO_BIN) $(SMOLBSD_DIR)/Makefile
 		echo "Create an instance directory first (make install or manually)"; \
 		exit 1; \
 	fi
-	rm -f $(SMOLBSD_DIR)/shclaw.com $(SMOLBSD_DIR)/images/shclaw-amd64.img
-	rm -rf $(SMOLBSD_DIR)/service/shclaw
 	cp $(COSMO_BIN) $(SMOLBSD_DIR)/shclaw.com
-	cp smolbsd/Dockerfile $(SMOLBSD_DIR)/dockerfiles/Dockerfile.shclaw
-	cd $(SMOLBSD_DIR) && ./smoler.sh build dockerfiles/Dockerfile.shclaw
+	cd $(SMOLBSD_DIR) && ./smoler.sh build -y $(CURDIR)/smolbsd/SMOLerfile
 	@echo ""
-	@echo "smolBSD image built: $(SMOLBSD_DIR)/images/shclaw-amd64.img"
+	@echo "smolBSD image built: $(SMOLBSD_DIR)/images/$(SMOLBSD_IMG).img"
 	@echo ""
-	@echo "Run:"
-	@echo "  cd $(SMOLBSD_DIR) && ./startnb.sh -k kernels/netbsd-SMOL \\"
-	@echo "    -i images/shclaw-amd64.img -w $(abspath $(AGENT_DIR))"
+	@echo "Run (Ctrl-A X stops the VM):"
+	@echo "  cd $(SMOLBSD_DIR) && ./smoler.sh run $(SMOLBSD_IMG) -w $(abspath $(AGENT_DIR))"
 
 # -------------------------------------------------------------------
 # Clean everything
@@ -308,9 +325,9 @@ smolbsd: $(COSMO_BIN) $(SMOLBSD_DIR)/Makefile
 clean:
 	rm -rf build build-cosmo $(MUSL_BIN) $(COSMO_BIN) $(COSMO_BIN).dbg $(COSMO_BIN).bak
 	rm -f docker/$(MUSL_BIN)
-	rm -f $(SMOLBSD_DIR)/shclaw.com $(SMOLBSD_DIR)/dockerfiles/Dockerfile.shclaw
+	rm -f $(SMOLBSD_DIR)/shclaw.com
 	rm -rf $(SMOLBSD_DIR)/service/shclaw $(SMOLBSD_DIR)/etc/shclaw.conf
-	rm -f $(SMOLBSD_DIR)/images/shclaw-amd64.img
+	rm -f $(SMOLBSD_DIR)/images/$(SMOLBSD_IMG).img $(SMOLBSD_DIR)/images/$(SMOLBSD_IMG).sig
 	$(MAKE) -C vendor/bearssl clean 2>/dev/null || true
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
 	rm -f vendor/tcc/.cosmo-patched

@@ -59,10 +59,23 @@ char *tc_strcpy(char *dst, const char *src);
 char *tc_strncpy(char *dst, const char *src, size_t n);
 int   tc_snprintf(char *buf, size_t sz, const char *fmt, ...);
 
+char *tc_strcat(char *dst, const char *src);
+char *tc_strncat(char *dst, const char *src, size_t n);
+char *tc_strdup(const char *s);
+int   tc_memcmp(const void *a, const void *b, size_t n);
+
 /* Search */
 char *tc_strstr(const char *haystack, const char *needle);
 char *tc_strchr(const char *s, int c);
+char *tc_strrchr(const char *s, int c);
 int   tc_atoi(const char *s);
+
+/* Characters (ASCII) */
+int tc_isdigit(int c);
+int tc_isalpha(int c);
+int tc_isspace(int c);
+int tc_tolower(int c);
+int tc_toupper(int c);
 
 /* ── Syscall helpers (injected by daemon) ── */
 
@@ -94,13 +107,14 @@ void tc_http_header(const char *name, const char *value);
 
 /* ── JSON (cJSON wrappers) ── */
 
-/* Parse a JSON string. Returns opaque handle; free with tc_json_free(). */
+/* Parse a JSON string. Returns an opaque handle. */
 void *tc_json_parse(const char *json);
 
-/* Free a parsed JSON object. */
+/* Free a parsed JSON object. Optional: each plugin call runs in its own
+ * process and all its memory is released when the call ends. */
 void  tc_json_free(void *json);
 
-/* Pretty-print JSON. Returns malloc'd string; caller must free(). */
+/* Pretty-print JSON into a new string. */
 char *tc_json_print(void *json);
 
 /* Get object field by name. Returns NULL if not found. */
@@ -125,5 +139,35 @@ double tc_json_double(void *json);
 
 /* Log a message (appears in daemon log). printf-style format. */
 void tc_log(const char *fmt, ...);
+
+/* ── libc names ── */
+
+/* Code written out of habit with these libc names still compiles: they
+ * map to the tc_* functions above. No other libc function exists here. */
+#define malloc   tc_malloc
+#define free     tc_free
+#define strlen   tc_strlen
+#define memcpy   tc_memcpy
+#define memset   tc_memset
+#define strcmp   tc_strcmp
+#define strncmp  tc_strncmp
+#define strcpy   tc_strcpy
+#define strncpy  tc_strncpy
+#define snprintf tc_snprintf
+#define strstr   tc_strstr
+#define strchr   tc_strchr
+#define strrchr  tc_strrchr
+#define strcat   tc_strcat
+#define strncat  tc_strncat
+#define strdup   tc_strdup
+#define memcmp   tc_memcmp
+#define atoi     tc_atoi
+
+#ifndef __bool_true_false_are_defined
+#define bool  _Bool
+#define true  1
+#define false 0
+#define __bool_true_false_are_defined 1
+#endif
 
 #endif /* TC_PLUGIN_H */

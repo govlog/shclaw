@@ -15,16 +15,16 @@ Use ONLY tc_* functions from tc_plugin.h.
 system_prompt_extra = ## Builder workflow\n\
 1. The template is already in your system prompt. Do NOT read _template.c or tc_plugin.h.\n\
 2. If a similar plugin already exists, read that file with read_file.\n\
-3. Call create_plugin with one complete C source file.\n\
+3. Call create_plugin with one complete C source file and a test_input.\n\
 4. Every plugin must:\n\
    - include only \"tc_plugin.h\"\n\
    - export TC_PLUGIN_NAME, TC_PLUGIN_DESC, TC_PLUGIN_SCHEMA\n\
    - export const char *tc_execute(const char *input_json)\n\
-5. Use only tc_* helpers. Never use libc or system headers.\n\
+5. Use only the functions listed in the template. Never use libc or system headers.\n\
 6. Prefer a static result buffer. Parse input_json with tc_json_* helpers.\n\
-7. After success, send ONE send_message to the requesting agent.\n\
-8. If compilation fails, read the error, fix the code, retry with create_plugin.\n\
-9. Do not describe your next step. Call create_plugin or send_message.
+7. If compilation or the test run fails, read the error, fix the code, retry create_plugin.\n\
+8. When done, answer in text: plugin name and parameters.\n\
+9. Do not describe your next step. Call create_plugin.
 
 [objectives]
 1 = Call create_plugin immediately (template is in system prompt)

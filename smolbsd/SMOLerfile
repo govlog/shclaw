@@ -1,0 +1,14 @@
+# At boot, basicrc mounts the "-w" host directory on /mnt and writes resolv.conf.
+# The builder copies its certctl(8) output: /etc/openssl/certs/ca-certificates.crt
+FROM base,etc
+
+LABEL smolbsd.service=shclaw
+LABEL smolbsd.minimize=y
+
+COPY /mnt/shclaw.com /usr/local/bin/shclaw
+
+RUN chmod 755 /usr/local/bin/shclaw
+
+# ping returns when 10.0.2.15 leaves IPv4 DAD (about 5 s after boot):
+# connections made before that fail.
+CMD ping -c1 -w2 10.0.2.3 >/dev/null 2>&1; /usr/local/bin/shclaw --workdir=/mnt

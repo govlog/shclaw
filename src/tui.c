@@ -11,7 +11,10 @@
 
 static struct termios orig_termios;
 static int term_raw = 0;
-static void term_write(const char *buf, size_t len);
+
+static void term_write(const char *buf, size_t len) {
+    write_all(STDOUT_FILENO, buf, len);
+}
 
 static void term_restore(void) {
     if (term_raw) {
@@ -35,7 +38,7 @@ static void term_raw_mode(void) {
 
 static void get_terminal_size(int *rows, int *cols) {
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 2 && ws.ws_col > 10) {
         *rows = ws.ws_row;
         *cols = ws.ws_col;
     } else {
@@ -48,30 +51,18 @@ static void get_terminal_size(int *rows, int *cols) {
 
 #define CSI        "\033["
 #define CLEAR_LINE CSI "2K"
-#define BOLD       CSI "1m"
 #define DIM        CSI "2m"
 #define RESET      CSI "0m"
 #define CYAN       CSI "36m"
 #define GREEN      CSI "32m"
-
-static void term_write(const char *buf, size_t len) {
-    while (len > 0) {
-        ssize_t n = write(STDOUT_FILENO, buf, len);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return;
-        }
-        if (n == 0) return;
-        buf += n;
-        len -= (size_t)n;
-    }
-}
 
 static void cursor_to(int row, int col) {
     char buf[32];
     int n = snprintf(buf, sizeof(buf), CSI "%d;%dH", row, col);
     term_write(buf, (size_t)n);
 }
+
+static int is_cont(unsigned char c) { return (c & 0xC0) == 0x80; }
 
 /* ── Scrollback buffer ── */
 
@@ -84,7 +75,7 @@ typedef struct {
     int scroll_offset;
 } scrollback_t;
 
-static void sb_add(scrollback_t *sb, const char *line) {
+static void sb_push(scrollback_t *sb, const char *line) {
     if (sb->count >= MAX_LINES) {
         memmove(sb->lines[0], sb->lines[1], (MAX_LINES - 1) * MAX_LINE_LEN);
         sb->count = MAX_LINES - 1;
@@ -103,23 +94,63 @@ typedef struct {
     int input_pos;
     int rows, cols;
     char target[64];
-    char sock_path[4200];
-    int event_fd;       /* persistent ATTACH connection for receiving events */
+    int event_fd;       /* persistent ATTACH connection */
     int quit;
+    int dirty;          /* redraw needed */
 } tui_state_t;
 
-/* ── Socket path resolution ── */
+/* Add text split on newlines and wrapped at the terminal width. The first
+ * `hl` bytes are drawn with `style`. Control bytes (escape sequences from
+ * model or web text) are neutralized. */
+static void add_text(tui_state_t *st, const char *style, size_t hl, const char *text) {
+    int width = st->cols - 1;
+    size_t len = strlen(text), pos = 0;
 
-static void resolve_sock_path(tui_state_t *st) {
-    ini_t *cfg = ini_load("etc/config.ini");
-    if (cfg) {
-        const char *data_dir = ini_get(cfg, "daemon", "data_dir");
-        snprintf(st->sock_path, sizeof(st->sock_path), "%s/shclaw.sock",
-                 data_dir ? data_dir : "./data");
-        ini_free(cfg);
-    } else {
-        memcpy(st->sock_path, "./data/shclaw.sock", sizeof("./data/shclaw.sock"));
+    do {
+        size_t take = 0;
+        int cols = 0;
+        while (pos + take < len && text[pos + take] != '\n' &&
+               cols < width && take < MAX_LINE_LEN - 64) {
+            take++;
+            while (pos + take < len && take < MAX_LINE_LEN - 1 &&
+                   is_cont((unsigned char)text[pos + take]))
+                take++;
+            cols++;
+        }
+
+        char row[MAX_LINE_LEN], clean[MAX_LINE_LEN];
+        for (size_t i = 0; i < take; i++) {
+            unsigned char c = (unsigned char)text[pos + i];
+            clean[i] = (c < 0x20 || c == 0x7f) ? ' ' : (char)c;
+        }
+        size_t h = pos < hl ? (hl - pos < take ? hl - pos : take) : 0;
+        if (h && style)
+            snprintf(row, sizeof(row), "%s%.*s" RESET "%.*s", style,
+                     (int)h, clean, (int)(take - h), clean + h);
+        else
+            snprintf(row, sizeof(row), "%.*s", (int)take, clean);
+        sb_push(&st->sb, row);
+
+        pos += take;
+        if (pos < len && text[pos] == '\n') pos++;
+    } while (pos < len);
+    st->dirty = 1;
+}
+
+static void add_system_msg(tui_state_t *st, const char *text) {
+    char line[MAX_LINE_LEN];
+    snprintf(line, sizeof(line), "--- %s ---", text);
+    add_text(st, DIM, strlen(line), line);
+}
+
+/* "agent: text" from the daemon, or "* agent calls tool(...)" */
+static void add_agent_line(tui_state_t *st, const char *line) {
+    if (line[0] == '*') {
+        add_text(st, DIM, strlen(line), line);
+        return;
     }
+    const char *colon = strchr(line, ':');
+    add_text(st, CYAN, colon ? (size_t)(colon - line) : 0, line);
 }
 
 /* ── Drawing ── */
@@ -130,7 +161,7 @@ static void draw_status_bar(tui_state_t *st) {
 
     char bar[512];
     int n = snprintf(bar, sizeof(bar),
-             CSI "7m" " shclaw │ @%s │ %d msgs │ /help " RESET,
+             CSI "7m" " shclaw │ @%s │ %d lines │ /help " RESET,
              st->target, st->sb.count);
     term_write(bar, (size_t)n);
 }
@@ -140,18 +171,13 @@ static void draw_messages(tui_state_t *st) {
     int total = st->sb.count;
     int start = total - msg_rows - st->sb.scroll_offset;
     if (start < 0) start = 0;
-    int end = start + msg_rows;
-    if (end > total) end = total;
 
     for (int row = 0; row < msg_rows; row++) {
         cursor_to(row + 2, 1);
         term_write(CLEAR_LINE, strlen(CLEAR_LINE));
-
         int idx = start + row;
-        if (idx < end) {
-            const char *line = st->sb.lines[idx];
-            term_write(line, strlen(line));
-        }
+        if (idx < total)
+            term_write(st->sb.lines[idx], strlen(st->sb.lines[idx]));
     }
 }
 
@@ -165,9 +191,11 @@ static void draw_input(tui_state_t *st) {
     if (st->input_len > 0)
         term_write(st->input, (size_t)st->input_len);
 
-    /* Position cursor after prompt + input_pos */
-    int prompt_visible = 1 + (int)strlen(st->target) + 2;  /* @name>_ */
-    cursor_to(st->rows, prompt_visible + st->input_pos + 1);
+    /* Cursor column: prompt + characters (not bytes) before input_pos */
+    int col = 1 + (int)strlen(st->target) + 2;
+    for (int i = 0; i < st->input_pos; i++)
+        if (!is_cont((unsigned char)st->input[i])) col++;
+    cursor_to(st->rows, col + 1);
 }
 
 static void redraw(tui_state_t *st) {
@@ -176,74 +204,32 @@ static void redraw(tui_state_t *st) {
     draw_messages(st);
     draw_input(st);
     term_write("\033[?25h", 6);  /* show cursor */
-}
-
-/* ── Message formatting ── */
-
-static void add_system_msg(tui_state_t *st, const char *text) {
-    char line[MAX_LINE_LEN];
-    snprintf(line, sizeof(line), DIM "--- %s ---" RESET, text);
-    sb_add(&st->sb, line);
-}
-
-static void add_user_msg(tui_state_t *st, const char *text) {
-    char line[MAX_LINE_LEN];
-    snprintf(line, sizeof(line), GREEN "you" RESET ": %s", text);
-    sb_add(&st->sb, line);
+    st->dirty = 0;
 }
 
 /* ── Socket I/O ── */
 
 static int send_to_agent(tui_state_t *st, const char *text) {
-    /* Send MSG on a separate one-shot connection */
-    int fd = sock_client_connect(st->sock_path);
-    if (fd < 0) return -1;
-
+    /* Format: agent_name\0text, over the attached connection */
     char data[TC_BUF_LG];
     size_t alen = strlen(st->target);
     size_t text_len = strlen(text);
     size_t total = alen + 1 + text_len;
-    if (total >= sizeof(data)) {
-        close(fd);
+    if (st->event_fd < 0 || total >= sizeof(data))
         return -1;
-    }
 
-    memcpy(data, st->target, alen);
-    data[alen] = '\0';
+    memcpy(data, st->target, alen + 1);
     memcpy(data + alen + 1, text, text_len);
-
-    if (sock_send_cmd(fd, SOCK_CMD_MSG, data, (uint32_t)total) != 0) {
-        close(fd);
-        return -1;
-    }
-    close(fd);
-    return 0;
-}
-
-static void add_agent_line(tui_state_t *st, const char *line) {
-    /* line is already "agent: text" from daemon broadcast */
-    char formatted[MAX_LINE_LEN];
-    /* Color the agent name part */
-    const char *colon = strchr(line, ':');
-    if (colon) {
-        int nlen = (int)(colon - line);
-        snprintf(formatted, sizeof(formatted), CYAN "%.*s" RESET "%s",
-                 nlen, line, colon);
-    } else {
-        snprintf(formatted, sizeof(formatted), "%s", line);
-    }
-    sb_add(&st->sb, formatted);
+    return sock_send(st->event_fd, SOCK_CMD_MSG, data, (uint32_t)total);
 }
 
 static void poll_events(tui_state_t *st) {
-    if (st->event_fd < 0) return;
-
     struct pollfd pfd = { .fd = st->event_fd, .events = POLLIN };
-    while (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+    while (st->event_fd >= 0 && poll(&pfd, 1, 0) > 0) {
         uint32_t type;
-        char data[TC_BUF_LG] = "";
-        if (sock_read_cmd(st->event_fd, &type, data, sizeof(data)) < 0) {
-            /* Connection lost */
+        char data[TC_BUF_LG];
+        if (!(pfd.revents & POLLIN) ||
+            sock_read_cmd(st->event_fd, &type, data, sizeof(data)) < 0) {
             close(st->event_fd);
             st->event_fd = -1;
             add_system_msg(st, "Lost connection to daemon");
@@ -261,32 +247,20 @@ static void poll_events(tui_state_t *st) {
             return;
         }
     }
-
-    if (pfd.revents & (POLLHUP | POLLERR)) {
-        close(st->event_fd);
-        st->event_fd = -1;
-        add_system_msg(st, "Daemon disconnected");
-    }
 }
 
 static void fetch_status(tui_state_t *st) {
-    int fd = sock_client_connect(st->sock_path);
-    if (fd < 0) {
-        add_system_msg(st, "Cannot connect to daemon");
-        return;
-    }
-    if (sock_send_cmd(fd, SOCK_CMD_STATUS, NULL, 0) != 0) {
-        add_system_msg(st, "Status request failed");
-        close(fd);
-        return;
-    }
+    int fd = sock_client_connect();
     uint32_t type;
     char data[TC_BUF_LG];
-    if (sock_read_cmd(fd, &type, data, sizeof(data)) >= 0)
-        add_system_msg(st, data);
-    else
+    if (fd < 0)
+        add_system_msg(st, "Cannot connect to daemon");
+    else if (sock_send(fd, SOCK_CMD_STATUS, NULL, 0) != 0 ||
+             sock_read_cmd(fd, &type, data, sizeof(data)) < 0)
         add_system_msg(st, "No response");
-    close(fd);
+    else
+        add_system_msg(st, data);
+    if (fd >= 0) close(fd);
 }
 
 /* ── Input handling ── */
@@ -311,151 +285,117 @@ static void handle_submit(tui_state_t *st) {
             add_system_msg(st, "  /agent <name>    Switch target agent");
             add_system_msg(st, "  /status          Show daemon status");
             add_system_msg(st, "  /quit or /q      Exit");
-            add_system_msg(st, "  Up/Down          Scroll messages");
+            add_system_msg(st, "  Up/Down PgUp/PgDn  Scroll messages");
             add_system_msg(st, "  Ctrl-C/D         Exit");
         } else {
             add_system_msg(st, "Unknown command. Type /help");
         }
-        st->input_len = 0;
-        st->input_pos = 0;
-        return;
+    } else {
+        char line[MAX_LINE_LEN];
+        snprintf(line, sizeof(line), "you: %s", st->input);
+        add_text(st, GREEN, 3, line);
+        if (send_to_agent(st, st->input) < 0)
+            add_system_msg(st, "Send failed (daemon not running?)");
     }
-
-    /* Send message */
-    add_user_msg(st, st->input);
-    if (send_to_agent(st, st->input) < 0)
-        add_system_msg(st, "Send failed (daemon not running?)");
-
     st->input_len = 0;
     st->input_pos = 0;
 }
 
-static void handle_key(tui_state_t *st, const char *seq, int n) {
-    /* Single byte */
-    if (n == 1) {
-        unsigned char c = seq[0];
+static void delete_range(tui_state_t *st, int from, int to) {
+    memmove(st->input + from, st->input + to, (size_t)(st->input_len - to));
+    st->input_len -= to - from;
+    if (st->input_pos > from) st->input_pos = from;
+}
+
+/* Previous / next character boundary (UTF-8) */
+static int prev_char(tui_state_t *st, int pos) {
+    do pos--; while (pos > 0 && is_cont((unsigned char)st->input[pos]));
+    return pos;
+}
+
+static int next_char(tui_state_t *st, int pos) {
+    do pos++; while (pos < st->input_len && is_cont((unsigned char)st->input[pos]));
+    return pos;
+}
+
+static void handle_csi(tui_state_t *st, unsigned char key, int tilde) {
+    int page = st->rows - 3;
+    int max = st->sb.count - (st->rows - 2);
+    if (max < 0) max = 0;
+    switch (key) {
+    case 'A': st->sb.scroll_offset += 1; break;      /* Up */
+    case 'B': st->sb.scroll_offset -= 1; break;      /* Down */
+    case 'C': if (st->input_pos < st->input_len) st->input_pos = next_char(st, st->input_pos); break;
+    case 'D': if (st->input_pos > 0) st->input_pos = prev_char(st, st->input_pos); break;
+    case 'H': st->input_pos = 0; break;
+    case 'F': st->input_pos = st->input_len; break;
+    case '5': if (tilde) st->sb.scroll_offset += page; break;   /* Page Up */
+    case '6': if (tilde) st->sb.scroll_offset -= page; break;   /* Page Down */
+    case '3':                                                   /* Delete */
+        if (tilde && st->input_pos < st->input_len)
+            delete_range(st, st->input_pos, next_char(st, st->input_pos));
+        break;
+    }
+    if (st->sb.scroll_offset > max) st->sb.scroll_offset = max;
+    if (st->sb.scroll_offset < 0) st->sb.scroll_offset = 0;
+}
+
+/* A read may hold one key, an escape sequence, UTF-8 text or a paste */
+static void handle_input(tui_state_t *st, const unsigned char *buf, int n) {
+    for (int i = 0; i < n && !st->quit; i++) {
+        unsigned char c = buf[i];
+        if (c == 27) {
+            if (i + 2 < n && buf[i + 1] == '[') {
+                int tilde = i + 3 < n && buf[i + 3] == '~';
+                handle_csi(st, buf[i + 2], tilde);
+                i += tilde ? 3 : 2;
+            }
+            continue;
+        }
         switch (c) {
-        case 3: case 4:  /* Ctrl-C, Ctrl-D */
+        case 3: case 4:    /* Ctrl-C, Ctrl-D */
             st->quit = 1;
-            return;
+            break;
         case 13: case 10:  /* Enter */
             handle_submit(st);
-            return;
+            break;
         case 127: case 8:  /* Backspace */
-            if (st->input_pos > 0) {
-                memmove(st->input + st->input_pos - 1,
-                        st->input + st->input_pos,
-                        st->input_len - st->input_pos);
-                st->input_pos--;
-                st->input_len--;
-            }
-            return;
-        case 1:  /* Ctrl-A: home */
-            st->input_pos = 0;
-            return;
-        case 5:  /* Ctrl-E: end */
-            st->input_pos = st->input_len;
-            return;
-        case 21:  /* Ctrl-U: clear line */
-            st->input_len = 0;
-            st->input_pos = 0;
-            return;
-        case 11:  /* Ctrl-K: kill to end */
-            st->input_len = st->input_pos;
-            return;
-        case 12:  /* Ctrl-L: force redraw */
-            term_write(CSI "2J", 4);
-            return;
+            if (st->input_pos > 0)
+                delete_range(st, prev_char(st, st->input_pos), st->input_pos);
+            break;
+        case 1:  st->input_pos = 0; break;              /* Ctrl-A */
+        case 5:  st->input_pos = st->input_len; break;  /* Ctrl-E */
+        case 21: st->input_len = st->input_pos = 0; break;  /* Ctrl-U */
+        case 11: st->input_len = st->input_pos; break;  /* Ctrl-K */
+        case 12: term_write(CSI "2J", 4); break;        /* Ctrl-L */
         default:
-            if (c >= 32 && c < 127 && st->input_len < (int)sizeof(st->input) - 1) {
-                memmove(st->input + st->input_pos + 1,
-                        st->input + st->input_pos,
-                        st->input_len - st->input_pos);
-                st->input[st->input_pos] = c;
-                st->input_pos++;
+            if (c >= 32 && st->input_len < (int)sizeof(st->input) - 1) {
+                memmove(st->input + st->input_pos + 1, st->input + st->input_pos,
+                        (size_t)(st->input_len - st->input_pos));
+                st->input[st->input_pos++] = (char)c;
                 st->input_len++;
             }
-            return;
         }
     }
-
-    /* Escape sequences: ESC [ X */
-    if (n >= 3 && seq[0] == 27 && seq[1] == '[') {
-        switch (seq[2]) {
-        case 'A':  /* Up — scroll */
-            if (st->sb.scroll_offset < st->sb.count - (st->rows - 2))
-                st->sb.scroll_offset++;
-            break;
-        case 'B':  /* Down — scroll */
-            if (st->sb.scroll_offset > 0)
-                st->sb.scroll_offset--;
-            break;
-        case 'C':  /* Right */
-            if (st->input_pos < st->input_len)
-                st->input_pos++;
-            break;
-        case 'D':  /* Left */
-            if (st->input_pos > 0)
-                st->input_pos--;
-            break;
-        case 'H':  /* Home */
-            st->input_pos = 0;
-            break;
-        case 'F':  /* End */
-            st->input_pos = st->input_len;
-            break;
-        case '5':  /* Page Up */
-            if (n >= 4 && seq[3] == '~') {
-                st->sb.scroll_offset += st->rows - 3;
-                int max = st->sb.count - (st->rows - 2);
-                if (max < 0) max = 0;
-                if (st->sb.scroll_offset > max) st->sb.scroll_offset = max;
-            }
-            break;
-        case '6':  /* Page Down */
-            if (n >= 4 && seq[3] == '~') {
-                st->sb.scroll_offset -= st->rows - 3;
-                if (st->sb.scroll_offset < 0) st->sb.scroll_offset = 0;
-            }
-            break;
-        case '3':  /* Delete */
-            if (n >= 4 && seq[3] == '~' && st->input_pos < st->input_len) {
-                memmove(st->input + st->input_pos,
-                        st->input + st->input_pos + 1,
-                        st->input_len - st->input_pos - 1);
-                st->input_len--;
-            }
-            break;
-        }
-    }
+    st->dirty = 1;
 }
 
 /* ── Entry point ── */
 
 int tui_run(const char *target_agent) {
-    tui_state_t st = {0};
+    static tui_state_t st;   /* ~512KB of scrollback: not on the stack */
     st.event_fd = -1;
-    snprintf(st.target, sizeof(st.target), "%s",
-             target_agent ? target_agent : "jarvis");
-    resolve_sock_path(&st);
+    snprintf(st.target, sizeof(st.target), "%s", target_agent ? target_agent : "jarvis");
 
     /* Establish persistent ATTACH connection */
-    st.event_fd = sock_client_connect(st.sock_path);
-    if (st.event_fd < 0) {
-        fprintf(stderr, "Cannot connect to daemon at %s\n", st.sock_path);
-        fprintf(stderr, "Is shclaw running?\n");
-        return 1;
-    }
-    if (sock_send_cmd(st.event_fd, SOCK_CMD_ATTACH, NULL, 0) != 0) {
-        close(st.event_fd);
-        fprintf(stderr, "Cannot attach to daemon at %s\n", st.sock_path);
+    st.event_fd = sock_client_connect();
+    if (st.event_fd < 0 || sock_send(st.event_fd, SOCK_CMD_ATTACH, NULL, 0) != 0) {
+        fprintf(stderr, "Cannot connect to the daemon. Is shclaw running?\n");
         return 1;
     }
 
     get_terminal_size(&st.rows, &st.cols);
     term_raw_mode();
-
-    /* Clear screen */
     term_write(CSI "2J", 4);
 
     add_system_msg(&st, "Connected to shclaw");
@@ -465,19 +405,22 @@ int tui_run(const char *target_agent) {
     add_system_msg(&st, welcome);
 
     while (!st.quit) {
-        /* Poll for daemon events */
-        poll_events(&st);
+        if (st.dirty)
+            redraw(&st);
 
-        redraw(&st);
+        struct pollfd pfd[2] = {
+            { .fd = STDIN_FILENO, .events = POLLIN },
+            { .fd = st.event_fd, .events = POLLIN },
+        };
+        poll(pfd, 2, 500);
 
-        struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
-        poll(&pfd, 1, 100);
-
-        if (pfd.revents & POLLIN) {
-            char buf[32];
+        if (pfd[1].revents)
+            poll_events(&st);
+        if (pfd[0].revents & POLLIN) {
+            unsigned char buf[4096];
             ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
             if (n > 0)
-                handle_key(&st, buf, (int)n);
+                handle_input(&st, buf, (int)n);
         }
 
         /* Track terminal resize */
@@ -486,12 +429,13 @@ int tui_run(const char *target_agent) {
         if (nr != st.rows || nc != st.cols) {
             st.rows = nr;
             st.cols = nc;
+            st.dirty = 1;
         }
     }
 
     /* Detach cleanly */
     if (st.event_fd >= 0) {
-        sock_send_cmd(st.event_fd, SOCK_CMD_DETACH, NULL, 0);
+        sock_send(st.event_fd, SOCK_CMD_DETACH, NULL, 0);
         close(st.event_fd);
     }
 

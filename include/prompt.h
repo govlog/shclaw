@@ -18,11 +18,12 @@
     "Do not describe what you WILL do — do it. " \
     "If you delegate, call send_message immediately.\n\n"
 
-#define PROMPT_TRIGGER_HEADER     "## Trigger\nType: %s\n%s\n\n"
+#define PROMPT_TRIGGER_HEADER     "## Trigger\nType: %s\n\n"
 #define PROMPT_THREAD_HEADER      "## Active thread: %s\n"
 #define PROMPT_OBJECTIVES_HEADER  "## Objectives\n%s\n"
 #define PROMPT_AGENTS_HEADER      "## Other agents\n%s\n"
 #define PROMPT_SCHEDULE_HEADER    "## Scheduled tasks\n%s\n"
+#define PROMPT_FACTS_HEADER       "## Facts\n%s\n"
 #define PROMPT_MEMORIES_HEADER    "## Recent memories\n%s\n"
 
 #define PROMPT_RULES \
@@ -39,20 +40,33 @@
 #define PROMPT_NOW                "## Now\n%s\nAct.\n"
 
 #define PROMPT_NONE               "None.\n"
-#define PROMPT_NO_DATA            "(no data)"
-#define PROMPT_STARTUP_FALLBACK   "Daemon STARTUP. Act."
+
+/* ── Trigger content (the user turn) ───────────────────── */
+
+#define PROMPT_EMPTY_TRIGGER      "(empty message)"
+#define PROMPT_TASK_DUE \
+    "It is time for a task you scheduled earlier: %s\n" \
+    "Do it now (for a reminder: remind the owner in text). " \
+    "It must not be scheduled again."
+#define PROMPT_MESSAGE_FROM       "Message from %s:\n%s"
+#define PROMPT_REPLY_FROM         "Answer from %s:\n%s"
 
 /* ── Communication rules ───────────────────────────────── */
 
 #define PROMPT_COMM_AGENT_MSG \
-    "## Communication (inter-agent message)\n" \
-    "You received a message from another agent.\n" \
-    "- If it is a status update, completion notice, or acknowledgment: " \
-        "inform the owner in text and STOP. Do NOT reply to the sender.\n" \
-    "- If it asks you to do something: do it, then reply with send_message.\n" \
-    "- NEVER send acknowledgments like \"OK\", \"Received\", \"Done\" " \
-        "back to an agent. These trigger unnecessary work.\n" \
-    "- Do NOT relay an agent's response back to the same agent.\n\n"
+    "## Communication (request from another agent)\n" \
+    "Another agent asked you something. Do it, then answer in text: " \
+        "your final text reply is sent back to it automatically.\n" \
+    "- Use send_message only to involve a third agent.\n" \
+    "- NEVER send acknowledgments like \"OK\", \"Received\", \"Done\". " \
+        "These trigger unnecessary work.\n\n"
+
+/* Used when every message received is an answer to an earlier request */
+#define PROMPT_COMM_AGENT_REPLY \
+    "## Communication (answer from another agent)\n" \
+    "This answers a request you sent earlier. Give the owner the result " \
+        "in text, then stop.\n" \
+    "- Do NOT reply to that agent or thank it.\n\n"
 
 #define PROMPT_COMM_DIRECT \
     "## Communication\n" \
@@ -84,29 +98,25 @@
     "- Write a single C file with #include \"tc_plugin.h\", " \
         "TC_PLUGIN_NAME, TC_PLUGIN_DESC, TC_PLUGIN_SCHEMA and " \
         "tc_execute(const char *input_json).\n" \
-    "- Use only tc_* functions from the header. " \
+    "- Use only the functions listed in the template. " \
         "No libc, no system headers.\n" \
-    "\n## HTTP signatures (exact)\n" \
-    "  int tc_http_get(const char *url, char *buf, size_t buf_sz);\n" \
-    "  int tc_http_post(const char *url, const char *content_type,\n" \
-    "                   const char *body, size_t body_len,\n" \
-    "                   char *resp, size_t resp_sz);\n" \
-    "  int tc_http_post_json(const char *url, const char *json,\n" \
-    "                        char *resp, size_t resp_sz);\n" \
-    "\n" \
+    "- Never simulate, mock or hard-code results: fetch real data with " \
+        "tc_http_get from a public API that needs no key (e.g. " \
+        "https://wttr.in/<city>?format=3 for weather, " \
+        "https://api.frankfurter.dev/v1/latest?from=EUR for currency rates). " \
+        "If no such API exists, say so.\n" \
     "- If compilation fails, fix the code and retry.\n" \
-    "- Do not describe your next step: call create_plugin, " \
-        "or send_message to report failure.\n" \
-    "- After success, send ONE send_message to the requesting agent. " \
-        "Do NOT also send to owner.\n" \
+    "- Pass test_input to create_plugin to see your plugin run.\n" \
+    "- Do not describe your next step: call create_plugin.\n" \
+    "- When done, answer in text with the plugin name and its " \
+        "parameters: the answer goes to whoever asked.\n" \
     "\n## Plugin template\n```c\n%s```\n\n"
 
 /* ── Builder nudges / stall messages ───────────────────── */
 
 #define PROMPT_BUILDER_NUDGE \
-    "Plugin creation was requested. Do not narrate. " \
-    "Call create_plugin now, or send_message to " \
-    "explain why you cannot."
+    "Do not narrate. Call create_plugin now with the complete, " \
+    "corrected code, or say in one sentence why you cannot."
 
 #define PROMPT_BUILDER_AUTO_FAIL \
     "Auto-compilation failed:\n%.3000s\n" \
@@ -117,6 +127,34 @@
 #define PROMPT_HUB_NUDGE \
     "You called list_agents but did not call send_message. " \
     "Do not narrate — call send_message now to delegate."
+
+/* ── Harness guards (small models loop, invent tools, send bad JSON) ── */
+
+#define PROMPT_EMPTY_NUDGE \
+    "Your last reply was empty. Reply in text, or call a tool."
+
+#define PROMPT_BAD_ARGS \
+    "Error: the arguments of %s are not a valid JSON object. " \
+    "Call it again with a JSON object that matches its schema."
+
+#define PROMPT_UNKNOWN_TOOL \
+    "Error: unknown tool '%s'. Available tools:"
+
+#define PROMPT_REPEAT_CALL \
+    "Error: %s was already called with these exact arguments. " \
+    "Use the earlier result, or do something else."
+
+#define PROMPT_ELIDED \
+    "\n[... %zu bytes of old tool output removed to fit the context budget]"
+
+/* ── Notices to the owner ──────────────────────────────── */
+
+#define PROMPT_LLM_ERROR          "(LLM error: %s)"
+#define PROMPT_NO_ANSWER          "(%s finished without an answer)"
+#define PROMPT_FAILED_ANSWER      "(%s could not finish the request)"
+#define PROMPT_REFUSED            "(the model declined to answer)"
+#define PROMPT_STUCK              "(stopped: the model kept repeating the same tool call)"
+#define PROMPT_MAX_TURNS          "(stopped after %d turns without finishing)"
 
 /* ── System prompt format (all sections assembled) ─────── */
 
@@ -130,6 +168,7 @@
     PROMPT_OBJECTIVES_HEADER \
     PROMPT_AGENTS_HEADER \
     PROMPT_SCHEDULE_HEADER \
+    PROMPT_FACTS_HEADER \
     PROMPT_MEMORIES_HEADER \
     PROMPT_RULES \
     PROMPT_NOW

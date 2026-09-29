@@ -4,14 +4,18 @@
 data_dir = ./data
 log_dir  = ./logs
 
+; Remove this section to run without IRC (TUI and CLI only).
+; Port 6697 uses TLS.
 [irc]
 server   = irc.example.com
-port     = 6667
+port     = 6697
 nick     = mybot
 channel  = #mychannel
 owner    = yournick
 
 ; --- LLM Providers ---
+; Optional keys: max_tokens (output limit per call), timeout (seconds
+; without data before a call fails, default 600)
 
 [provider.anthropic]
 type     = anthropic
@@ -21,16 +25,18 @@ api_key  = sk-ant-CHANGEME
 type     = openai
 api_key  = sk-CHANGEME
 
-; Ollama (local, no API key needed)
+; Ollama (local, no API key needed). Also start the Ollama server with a
+; larger context, e.g. OLLAMA_CONTEXT_LENGTH=16384.
 ;[provider.ollama]
 ;type     = openai
 ;base_url = http://localhost:11434
 ;api_key  =
+;timeout  = 900
 
 ; --- Model tiers ---
 ; Format: provider_name/model_id
 
 [tiers]
-simple   = anthropic/claude-haiku-4-5-20251001
-standard = anthropic/claude-sonnet-4-6
-complex  = anthropic/claude-opus-4-6
+simple   = anthropic/claude-haiku-4-5
+standard = anthropic/claude-sonnet-5-5
+complex  = anthropic/claude-opus-5-5

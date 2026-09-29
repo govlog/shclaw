@@ -3,7 +3,7 @@
  */
 
 #include "../include/tc.h"
-#include <bearssl.h>
+#include <limits.h>
 
 void uuid_short(char *out, int len) {
     unsigned char buf[16];
@@ -42,28 +42,36 @@ have_entropy:
     out[len] = '\0';
 }
 
-int atomic_write(const char *path, const char *data, size_t len) {
-    char tmp[4200];
-    snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
-
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -1;
-
-    size_t written = 0;
-    while (written < len) {
-        ssize_t n = write(fd, data + written, len - written);
+int write_all(int fd, const void *buf, size_t len) {
+    const char *p = buf;
+    while (len > 0) {
+        ssize_t n = write(fd, p, len);
         if (n < 0) {
             if (errno == EINTR) continue;
-            close(fd);
-            unlink(tmp);
             return -1;
         }
-        written += n;
+        if (n == 0) return -1;
+        p += n;
+        len -= (size_t)n;
     }
+    return 0;
+}
+
+int atomic_write(const char *path, const char *data, size_t len, mode_t mode) {
+    static int seq;
+    char tmp[4200];
+    /* Unique per call: several threads may write the same path */
+    snprintf(tmp, sizeof(tmp), "%s.tmp.%d.%d", path, (int)getpid(),
+             __sync_fetch_and_add(&seq, 1));
+
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
+    if (fd < 0) return -1;
+
+    int err = write_all(fd, data, len);
     fsync(fd);
     close(fd);
 
-    if (rename(tmp, path) != 0) {
+    if (err != 0 || rename(tmp, path) != 0) {
         unlink(tmp);
         return -1;
     }
@@ -118,78 +126,125 @@ int mkdirs_for(const char *path) {
     return tmp[0] ? mkdirs(tmp) : 0;
 }
 
+void buf_appendf(char *buf, size_t sz, size_t *off, const char *fmt, ...) {
+    if (sz == 0 || *off >= sz - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, sz - *off, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    *off += (size_t)n;
+    if (*off > sz - 1) *off = sz - 1;
+}
+
+int utf8_prefix(const char *s, int max) {
+    int n = (int)strnlen(s, (size_t)max);
+    if (n == max)
+        while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    return n;
+}
+
+void cli_data_dir(char *out, size_t sz) {
+    ini_t *cfg = ini_load("etc/config.ini");
+    const char *dir = ini_get(cfg, "daemon", "data_dir");
+    snprintf(out, sz, "%s", dir ? dir : "./data");
+    ini_free(cfg);
+}
+
 /* ── JSON helpers ─────────────────────────────────────── */
 
 const char *j_str(cJSON *obj, const char *key) {
-    if (!obj) return NULL;
     cJSON *item = cJSON_GetObjectItem(obj, key);
-    return (item && cJSON_IsString(item)) ? item->valuestring : NULL;
+    return cJSON_IsString(item) ? item->valuestring : NULL;
 }
 
+/* Small models often send numbers and booleans as strings: accept both. */
 int j_int(cJSON *obj, const char *key, int def) {
-    if (!obj) return def;
     cJSON *item = cJSON_GetObjectItem(obj, key);
-    return (item && cJSON_IsNumber(item)) ? item->valueint : def;
-}
-
-int j_bool(cJSON *obj, const char *key, int def) {
-    if (!obj) return def;
-    cJSON *item = cJSON_GetObjectItem(obj, key);
-    if (!item) return def;
-    if (cJSON_IsBool(item)) return cJSON_IsTrue(item);
+    if (cJSON_IsNumber(item)) return item->valueint;
+    if (cJSON_IsString(item)) {
+        char *end;
+        errno = 0;
+        long v = strtol(item->valuestring, &end, 10);
+        if (end != item->valuestring && *end == '\0' && errno == 0 &&
+            v >= INT_MIN && v <= INT_MAX)
+            return (int)v;
+    }
     return def;
 }
 
-cJSON *json_load_array(const char *path) {
-    char *data = file_slurp(path, NULL);
-    if (!data) return cJSON_CreateArray();
-    cJSON *arr = cJSON_Parse(data);
-    free(data);
-    if (arr && cJSON_IsArray(arr)) return arr;
-    cJSON_Delete(arr);
-    return cJSON_CreateArray();
+int j_bool(cJSON *obj, const char *key, int def) {
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    if (cJSON_IsBool(item)) return cJSON_IsTrue(item);
+    if (cJSON_IsNumber(item)) return item->valuedouble != 0;
+    if (cJSON_IsString(item)) {
+        const char *s = item->valuestring;
+        if (!strcasecmp(s, "true") || !strcasecmp(s, "yes") || !strcmp(s, "1"))
+            return 1;
+        if (!strcasecmp(s, "false") || !strcasecmp(s, "no") || !strcmp(s, "0"))
+            return 0;
+    }
+    return def;
 }
 
-cJSON *json_load_object(const char *path) {
+cJSON *json_load(const char *path, int want_array) {
     char *data = file_slurp(path, NULL);
-    if (!data) return cJSON_CreateObject();
-    cJSON *obj = cJSON_Parse(data);
+    if (!data)
+        return errno == ENOENT ? (want_array ? cJSON_CreateArray() : cJSON_CreateObject())
+                               : NULL;
+    cJSON *json = cJSON_Parse(data);
     free(data);
-    if (obj && cJSON_IsObject(obj)) return obj;
-    cJSON_Delete(obj);
-    return cJSON_CreateObject();
+    if (want_array ? cJSON_IsArray(json) : cJSON_IsObject(json))
+        return json;
+    cJSON_Delete(json);
+    log_error("%s is not valid JSON: fix or delete it", path);
+    return NULL;
 }
 
+void utf8_scrub(char *s) {
+    unsigned char *p = (unsigned char *)s;
+    while (*p) {
+        int n = *p < 0x80 ? 0 : *p < 0xC2 ? -1 : *p < 0xE0 ? 1 : *p < 0xF0 ? 2 :
+                *p < 0xF5 ? 3 : -1;
+        int ok = n >= 0;
+        for (int i = 1; ok && i <= n; i++)
+            ok = (p[i] & 0xC0) == 0x80;
+        /* No overlong forms, surrogates or code points past U+10FFFF */
+        if (ok && n == 2)
+            ok = !(p[0] == 0xE0 && p[1] < 0xA0) && !(p[0] == 0xED && p[1] > 0x9F);
+        if (ok && n == 3)
+            ok = !(p[0] == 0xF0 && p[1] < 0x90) && !(p[0] == 0xF4 && p[1] > 0x8F);
+        if (!ok) {
+            *p++ = '?';
+            continue;
+        }
+        p += n + 1;
+    }
+}
+
+/* Only daemon state goes through here: keep it private to the owner. */
 int json_save_atomic(const char *path, cJSON *obj, int formatted) {
     char *json = formatted ? cJSON_Print(obj) : cJSON_PrintUnformatted(obj);
     if (!json) return -1;
-    int ret = atomic_write(path, json, strlen(json));
+    int ret = atomic_write(path, json, strlen(json), 0600);
     free(json);
     return ret;
 }
 
-void now_iso(char *buf, size_t sz) {
-    time_t t = time(NULL);
+void format_time(time_t t, int local, char *buf, size_t sz) {
     struct tm tm;
-    gmtime_r(&t, &tm);
-    snprintf(buf, sz, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+    if (local) localtime_r(&t, &tm); else gmtime_r(&t, &tm);
+    snprintf(buf, sz, "%04d-%02d-%02dT%02d:%02d:%02d%s",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
+             tm.tm_hour, tm.tm_min, tm.tm_sec, local ? "" : "Z");
+}
+
+void now_iso(char *buf, size_t sz) {
+    format_time(time(NULL), 0, buf, sz);
 }
 
 int64_t now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-void sha256_hex(const void *data, size_t len, char out[65]) {
-    br_sha256_context ctx;
-    unsigned char hash[32];
-    br_sha256_init(&ctx);
-    br_sha256_update(&ctx, data, len);
-    br_sha256_out(&ctx, hash);
-    for (int i = 0; i < 32; i++)
-        sprintf(out + i * 2, "%02x", hash[i]);
-    out[64] = '\0';
 }

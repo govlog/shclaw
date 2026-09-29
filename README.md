@@ -9,9 +9,9 @@
 
 ![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![musl](https://img.shields.io/badge/musl-528K-blue?style=flat-square)
-![cosmo](https://img.shields.io/badge/cosmo-968K-blue?style=flat-square)
-![Lines](https://img.shields.io/badge/~6000_lines-grey?style=flat-square)
+![musl](https://img.shields.io/badge/musl-530K-blue?style=flat-square)
+![cosmo](https://img.shields.io/badge/cosmo-970K-blue?style=flat-square)
+![Lines](https://img.shields.io/badge/~7000_lines-grey?style=flat-square)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 ![FreeBSD](https://img.shields.io/badge/FreeBSD-AB2B28?style=flat-square&logo=freebsd&logoColor=white)
 ![NetBSD](https://img.shields.io/badge/NetBSD-FF6600?style=flat-square&logo=netbsd&logoColor=white)
@@ -37,7 +37,7 @@ A multi-agent AI orchestrator in C. One static binary under 1MB. It talks to LLM
 
 The binary is polyglot: built with [Cosmopolitan Libc](https://justine.lol/cosmopolitan/), it produces a single ELF that runs unmodified on Linux, FreeBSD, NetBSD, and OpenBSD. Same file, four kernels, no emulation -- the libc abstracts away syscall differences at compile time.
 
-It also embeds [TinyCC](https://bellard.org/tcc/) (Fabrice Bellard's C compiler) as a library. When an agent wants a new tool, it writes C source code. The daemon compiles it in-memory with `tcc_compile_string()`, relocates it into the process address space with `tcc_relocate()`, and resolves the entry point with `tcc_get_symbol()`. No `.so` ever touches disk -- the compiled code is live and callable immediately. Plugins are sandboxed: no libc access, only a curated set of functions (HTTP+TLS, JSON, file I/O) injected by the daemon before compilation. This means the binary is simultaneously an AI orchestrator, an IRC client, a TLS stack, and a C compiler -- all in under 1MB.
+It also embeds [TinyCC](https://bellard.org/tcc/) (Fabrice Bellard's C compiler) as a library. When an agent wants a new tool, it writes C source code. The daemon compiles it in memory with `tcc_compile_string()`, relocates it into the process address space with `tcc_relocate()`, and resolves the entry point with `tcc_get_symbol()`. No `.so` ever touches disk -- the compiled code is live and callable immediately. Plugins get no libc, only a curated set of functions (HTTP+TLS, JSON, file I/O) injected by the daemon before compilation. Each call runs in a forked child with a timeout, so a plugin that crashes or hangs cannot take the daemon down. This means the binary is simultaneously an AI orchestrator, an IRC client, a TLS stack, and a C compiler -- all in under 1MB.
 
 > **Fair warning.** Shclaw gives AI agents access to shell commands, file I/O, and network calls. One of them can write and compile C at runtime. Run it somewhere you don't care about -- a VM, a container, a Pi on a VLAN.
 
@@ -45,16 +45,16 @@ It also embeds [TinyCC](https://bellard.org/tcc/) (Fabrice Bellard's C compiler)
 
 ## How it works
 
-The daemon runs an event loop that watches IRC and a Unix socket. Triggers (IRC messages, scheduled tasks, inter-agent messages, CLI commands) create sessions. Each agent has its own thread, a personality, persistent memory, and access to tools.
+The daemon runs an event loop that watches IRC and a Unix socket. Triggers (IRC messages, scheduled tasks, inter-agent messages, CLI commands) create sessions. Each session runs in its own thread; an agent runs one session at a time and has a personality, persistent memory, and access to tools.
 
-Agents coordinate via `send_message` -- file-based inboxes polled every 5 seconds.
+Agents coordinate via `send_message` -- file-based inboxes. When an agent answers a request in plain text, the daemon sends that answer back to the agent that asked, so small models that forget `send_message` still close the loop.
 
 ### Agent types
 
 Each agent is defined by an INI file in `etc/agents/`. Two flags matter:
 
 - **`hub = true`** -- Default recipient for IRC messages without an `@mention`. Handles general conversation, delegates to specialists. Works fine with small models (`qwen3.5:9b`, `gpt-4.1-nano`).
-- **`builder = true`** -- Can create C plugins at runtime via `create_plugin`. Only sees 4 tools to keep its context focused. The plugin template is pre-injected into its prompt, and the daemon auto-extracts code if the model outputs it as text. Even small models like `qwen3.5:9b` can create working plugins on the first try.
+- **`builder = true`** -- Can create C plugins at runtime via `create_plugin`. Only sees 4 tools to keep its context focused. The plugin template, with every available function, is pre-injected into its prompt. Compile errors come back with the offending source lines, and `create_plugin` can test-run the new plugin with a sample input, showing each HTTP call it made. The daemon also compiles code the model outputs as text. With this loop, even `gpt-4.1-nano` writes a working weather plugin.
 
 A typical setup: a hub (cheap/local model), a research agent (standard model), a builder (capable model).
 
@@ -67,7 +67,7 @@ Each agent has two persistence layers:
 
 ### Runtime plugins
 
-Agents can write C plugins that get compiled in-memory by [TinyCC](https://bellard.org/tcc/). No `.so` hits disk. Plugins run sandboxed (no libc) but get HTTP+TLS, JSON, and file I/O through injected `tc_*` functions.
+Agents can write C plugins that get compiled in-memory by [TinyCC](https://bellard.org/tcc/). No `.so` hits disk. Plugins have no libc but get HTTP+TLS, JSON, and file I/O through injected `tc_*` functions. This is not a security sandbox: a plugin is native code with the daemon's rights.
 
 See [doc/plugin-api.md](doc/plugin-api.md) for the full plugin API.
 
@@ -108,14 +108,15 @@ api_key = sk-ant-api03-YOUR-KEY-HERE
 type     = openai
 base_url = http://localhost:11434
 api_key  =
+timeout  = 900      ; seconds of silence allowed (slow local models)
 
 [tiers]
-simple   = anthropic/claude-haiku-4-5-20251001
-standard = anthropic/claude-sonnet-4-6
-complex  = anthropic/claude-opus-4-6
-local    = ollama/llama3
+simple   = anthropic/claude-haiku-4-5
+standard = anthropic/claude-sonnet-5-5
+complex  = anthropic/claude-opus-5-5
+local    = ollama/qwen3.5:9b
 
-# Optional -- remove to run without IRC
+# Optional -- remove to run without IRC (TUI and CLI only)
 [irc]
 server      = irc.libera.chat
 port        = 6697
@@ -142,6 +143,16 @@ personality = You are Jarvis, a helpful and efficient assistant.
 
 See `etc/agents/*.ini.example` for more examples.
 
+Other keys:
+
+| Section | Key | Default | Meaning |
+|---------|-----|---------|---------|
+| `[provider.*]` | `max_tokens` | 16000 (official APIs), 4096 (others) | Output limit per model call |
+| `[provider.*]` | `timeout` | 600 | Seconds without data before a model call fails |
+| `[agent]` | `history_budget` | 0 (off) | Characters of tool output kept in a session; older outputs are shortened. For small context windows, OpenAI-compatible providers only |
+
+For Ollama, also raise the server context size (`OLLAMA_CONTEXT_LENGTH=16384` or more): with the default, the system prompt and tool list do not fit and the model silently loses its instructions.
+
 ### Run
 
 ```bash
@@ -154,24 +165,28 @@ See `etc/agents/*.ini.example` for more examples.
 ./shclaw stop             # graceful shutdown
 ```
 
-The daemon looks for `etc/config.ini` in the current directory. Override with `--workdir=/path/to/instance`.
+The daemon looks for `etc/config.ini` in the current directory. Override with `--workdir=/path/to/instance`. For plugins, the instance also needs `include/tc_plugin.h` and `plugins/_template.c` from this repository (`make install` copies them).
 
 ### Docker
 
 ```bash
 make docker-image
-docker run -v ./my-instance:/app/instance shclaw
+docker run --user "$(id -u):$(id -g)" -v "$PWD/my-instance:/app/instance" shclaw
 ```
+
+`--user` lets the daemon write `data/` and `logs/` into your instance directory.
 
 ### smolBSD (NetBSD microVM)
 
 The Cosmopolitan binary runs on [smolBSD](https://github.com/NetBSDfr/smolBSD) -- a minimal NetBSD VM that boots in ~60ms.
 
 ```bash
+make cosmo
 make smolbsd AGENT_DIR=/path/to/instance
-cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
-  -i images/shclaw-amd64.img -w /path/to/instance
+cd vendor/smolbsd && ./smoler.sh run shclaw-amd64:latest -w /path/to/instance
 ```
+
+The instance directory is shared over 9P and mounted on `/mnt`. Ctrl-A X stops the VM. Needs `bmake`, `qemu-system-x86_64` (KVM), `bsdtar`, `sgdisk` and `sudo` or `doas`.
 
 ---
 
@@ -184,7 +199,7 @@ cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
 | `exec` | Run a shell command |
 | `read_file` | Read a file |
 | `write_file` | Write/append a file |
-| `schedule_task` | One-shot task at a given time |
+| `schedule_task` | One-shot task, in N minutes or at a given time |
 | `schedule_recurring` | Recurring task |
 | `list_tasks` | List scheduled tasks |
 | `update_task` | Modify a task |
@@ -195,7 +210,7 @@ cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
 | `get_fact` | Retrieve a fact |
 | `send_message` | Message an agent, the owner, or broadcast |
 | `list_agents` | List running agents |
-| `create_plugin` | Write + compile a C plugin (builder only) |
+| `create_plugin` | Write, compile and test-run a C plugin (builder only) |
 | `clear_memory` | Clear memories/facts |
 
 Plugins created by agents become tools available to everyone immediately.
@@ -214,6 +229,15 @@ you>    @all status                             => broadcast
 
 bot>    jarvis: CPU is at 12%, all good.
 bot>    oracle: I see 3 anomalies in the log...
+```
+
+---
+
+## Checks
+
+```bash
+make check         # tests/check.c: HTTP, IRC, mentions, dates, tool arguments...
+make check-cosmo   # the same checks built with cosmocc
 ```
 
 ---

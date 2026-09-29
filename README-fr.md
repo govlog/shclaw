@@ -9,9 +9,9 @@
 
 ![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
 ![License](https://img.shields.io/badge/Licence-MIT-green?style=flat-square)
-![musl](https://img.shields.io/badge/musl-528K-blue?style=flat-square)
-![cosmo](https://img.shields.io/badge/cosmo-968K-blue?style=flat-square)
-![Lines](https://img.shields.io/badge/~6000_lignes-grey?style=flat-square)
+![musl](https://img.shields.io/badge/musl-530K-blue?style=flat-square)
+![cosmo](https://img.shields.io/badge/cosmo-970K-blue?style=flat-square)
+![Lines](https://img.shields.io/badge/~7000_lignes-grey?style=flat-square)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 ![FreeBSD](https://img.shields.io/badge/FreeBSD-AB2B28?style=flat-square&logo=freebsd&logoColor=white)
 ![NetBSD](https://img.shields.io/badge/NetBSD-FF6600?style=flat-square&logo=netbsd&logoColor=white)
@@ -37,7 +37,7 @@ Un orchestrateur multi-agents IA en C. Un seul binaire statique de moins de 1Mo.
 
 Le binaire est polyglotte : compilé avec [Cosmopolitan Libc](https://justine.lol/cosmopolitan/), il produit un seul ELF qui tourne tel quel sur Linux, FreeBSD, NetBSD et OpenBSD. Même fichier, quatre noyaux, pas d'émulation -- la libc abstrait les différences de syscalls à la compilation.
 
-Il embarque aussi [TinyCC](https://bellard.org/tcc/) (le compilateur C de Fabrice Bellard) comme bibliothèque. Quand un agent veut un nouvel outil, il écrit du code source C. Le daemon le compile en mémoire avec `tcc_compile_string()`, le reloge dans l'espace d'adressage du processus avec `tcc_relocate()`, et résout le point d'entrée avec `tcc_get_symbol()`. Aucun `.so` ne touche jamais le disque -- le code compilé est immédiatement vivant et appelable. Les plugins sont sandboxés : pas d'accès libc, seulement un ensemble de fonctions sélectionnées (HTTP+TLS, JSON, I/O fichier) injectées par le daemon avant la compilation. Le binaire est donc à la fois un orchestrateur IA, un client IRC, une stack TLS, et un compilateur C -- le tout en moins de 1Mo.
+Il embarque aussi [TinyCC](https://bellard.org/tcc/) (le compilateur C de Fabrice Bellard) comme bibliothèque. Quand un agent veut un nouvel outil, il écrit du code source C. Le daemon le compile en mémoire avec `tcc_compile_string()`, le reloge dans l'espace d'adressage du processus avec `tcc_relocate()`, et résout le point d'entrée avec `tcc_get_symbol()`. Aucun `.so` ne touche jamais le disque -- le code compilé est immédiatement vivant et appelable. Les plugins n'ont pas de libc, seulement un ensemble de fonctions sélectionnées (HTTP+TLS, JSON, I/O fichier) injectées par le daemon avant la compilation. Chaque appel tourne dans un processus fils avec un délai maximal : un plugin qui plante ou boucle ne fait pas tomber le daemon. Le binaire est donc à la fois un orchestrateur IA, un client IRC, une stack TLS, et un compilateur C -- le tout en moins de 1Mo.
 
 > **Attention.** Shclaw donne à des agents IA l'accès à des commandes shell, à l'écriture de fichiers et à des appels réseau. L'un d'entre eux peut écrire et compiler du C à la volée. Faites-le tourner sur un truc dont vous vous fichez -- une VM, un conteneur, un Pi sur un VLAN.
 
@@ -45,16 +45,16 @@ Il embarque aussi [TinyCC](https://bellard.org/tcc/) (le compilateur C de Fabric
 
 ## Comment ça marche
 
-Le daemon tourne une boucle d'événements qui surveille IRC et un socket Unix. Les déclencheurs (messages IRC, tâches planifiées, messages inter-agents, commandes CLI) créent des sessions. Chaque agent a son propre thread, une personnalité, une mémoire persistante, et accès à des outils.
+Le daemon tourne une boucle d'événements qui surveille IRC et un socket Unix. Les déclencheurs (messages IRC, tâches planifiées, messages inter-agents, commandes CLI) créent des sessions. Chaque session tourne dans son propre thread ; un agent traite une session à la fois et a une personnalité, une mémoire persistante, et accès à des outils.
 
-Les agents se coordonnent via `send_message` -- des boîtes aux lettres fichier consultées toutes les 5 secondes.
+Les agents se coordonnent via `send_message` -- des boîtes aux lettres fichier. Quand un agent répond en texte à une demande, le daemon renvoie cette réponse à l'agent demandeur : les petits modèles qui oublient `send_message` bouclent quand même la boucle.
 
 ### Types d'agents
 
 Chaque agent est défini par un fichier INI dans `etc/agents/`. Deux flags comptent :
 
 - **`hub = true`** -- Destinataire par défaut des messages IRC sans `@mention`. Gère la conversation générale, délègue aux spécialistes. Marche bien avec des petits modèles (`qwen3.5:9b`, `gpt-4.1-nano`).
-- **`builder = true`** -- Peut créer des plugins C à la volée via `create_plugin`. Ne voit que 4 outils pour rester concentré. Le template plugin est pré-injecté dans son prompt, et le daemon extrait automatiquement le code si le modèle le sort en texte. Même des petits modèles comme `qwen3.5:9b` arrivent à créer des plugins fonctionnels du premier coup.
+- **`builder = true`** -- Peut créer des plugins C à la volée via `create_plugin`. Ne voit que 4 outils pour rester concentré. Le template plugin, avec toutes les fonctions disponibles, est pré-injecté dans son prompt. Les erreurs de compilation reviennent avec les lignes de code fautives, et `create_plugin` peut lancer le nouveau plugin sur une entrée d'essai en montrant chaque appel HTTP. Le daemon compile aussi le code que le modèle sort en texte. Avec cette boucle, même `gpt-4.1-nano` écrit un plugin météo qui marche.
 
 Un setup typique : un hub (modèle pas cher/local), un agent recherche (modèle standard), un builder (modèle costaud).
 
@@ -67,7 +67,7 @@ Chaque agent a deux couches de persistance :
 
 ### Plugins à la volée
 
-Les agents peuvent écrire des plugins C qui sont compilés en mémoire par [TinyCC](https://bellard.org/tcc/). Aucun `.so` n'est écrit sur le disque. Les plugins tournent en sandbox (pas de libc) mais ont accès à HTTP+TLS, JSON et I/O fichier via des fonctions `tc_*` injectées.
+Les agents peuvent écrire des plugins C qui sont compilés en mémoire par [TinyCC](https://bellard.org/tcc/). Aucun `.so` n'est écrit sur le disque. Les plugins n'ont pas de libc mais ont accès à HTTP+TLS, JSON et I/O fichier via des fonctions `tc_*` injectées. Ce n'est pas un bac à sable de sécurité : un plugin est du code natif avec les droits du daemon.
 
 Voir [doc/plugin-api-fr.md](doc/plugin-api-fr.md) pour l'API plugin complète.
 
@@ -81,8 +81,8 @@ Voir [doc/plugin-api-fr.md](doc/plugin-api-fr.md) pour l'API plugin complète.
 sudo apt install build-essential musl-tools git  # Debian/Ubuntu
 git clone https://github.com/govlog/shclaw.git && cd shclaw
 
-make musl          # Linux uniquement, ~528K
-make cosmo         # Multi-plateforme (Linux/NetBSD/FreeBSD/OpenBSD), ~968K
+make musl          # Linux uniquement, ~530K
+make cosmo         # Multi-plateforme (Linux/NetBSD/FreeBSD/OpenBSD), ~970K
 ```
 
 Les bibliothèques vendorisées sont récupérées automatiquement au premier build.
@@ -108,14 +108,15 @@ api_key = sk-ant-api03-VOTRE-CLE-ICI
 type     = openai
 base_url = http://localhost:11434
 api_key  =
+timeout  = 900      ; secondes sans données tolérées (modèles locaux lents)
 
 [tiers]
-simple   = anthropic/claude-haiku-4-5-20251001
-standard = anthropic/claude-sonnet-4-6
-complex  = anthropic/claude-opus-4-6
-local    = ollama/llama3
+simple   = anthropic/claude-haiku-4-5
+standard = anthropic/claude-sonnet-5-5
+complex  = anthropic/claude-opus-5-5
+local    = ollama/qwen3.5:9b
 
-# Optionnel -- supprimez cette section pour tourner sans IRC
+# Optionnel -- supprimez cette section pour tourner sans IRC (TUI et CLI seulement)
 [irc]
 server      = irc.libera.chat
 port        = 6697
@@ -142,6 +143,16 @@ personality = Tu es Jarvis, un assistant efficace et direct.
 
 Voir `etc/agents/*.ini.example` pour plus d'exemples.
 
+Autres clés :
+
+| Section | Clé | Défaut | Rôle |
+|---------|-----|--------|------|
+| `[provider.*]` | `max_tokens` | 16000 (APIs officielles), 4096 (autres) | Limite de sortie par appel au modèle |
+| `[provider.*]` | `timeout` | 600 | Secondes sans données avant l'échec d'un appel au modèle |
+| `[agent]` | `history_budget` | 0 (désactivé) | Caractères de sorties d'outils gardés dans une session ; les plus anciennes sont raccourcies. Pour les petites fenêtres de contexte, fournisseurs compatibles OpenAI seulement |
+
+Pour Ollama, augmentez aussi la taille de contexte du serveur (`OLLAMA_CONTEXT_LENGTH=16384` ou plus) : avec la valeur par défaut, le prompt système et la liste des outils ne tiennent pas et le modèle perd ses instructions sans prévenir.
+
 ### Lancer
 
 ```bash
@@ -154,24 +165,28 @@ Voir `etc/agents/*.ini.example` pour plus d'exemples.
 ./shclaw stop             # arrêt propre
 ```
 
-Le daemon cherche `etc/config.ini` dans le répertoire courant. Changer avec `--workdir=/chemin/vers/instance`.
+Le daemon cherche `etc/config.ini` dans le répertoire courant. Changer avec `--workdir=/chemin/vers/instance`. Pour les plugins, l'instance a aussi besoin de `include/tc_plugin.h` et `plugins/_template.c` de ce dépôt (`make install` les copie).
 
 ### Docker
 
 ```bash
 make docker-image
-docker run -v ./my-instance:/app/instance shclaw
+docker run --user "$(id -u):$(id -g)" -v "$PWD/mon-instance:/app/instance" shclaw
 ```
+
+`--user` permet au daemon d'écrire `data/` et `logs/` dans votre répertoire d'instance.
 
 ### smolBSD (microVM NetBSD)
 
 Le binaire Cosmopolitan tourne sur [smolBSD](https://github.com/NetBSDfr/smolBSD) -- une VM NetBSD minimale qui boote en ~60ms.
 
 ```bash
+make cosmo
 make smolbsd AGENT_DIR=/chemin/vers/instance
-cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
-  -i images/shclaw-amd64.img -w /chemin/vers/instance
+cd vendor/smolbsd && ./smoler.sh run shclaw-amd64:latest -w /chemin/vers/instance
 ```
+
+Le répertoire d'instance est partagé en 9P et monté sur `/mnt`. Ctrl-A X arrête la VM. Il faut `bmake`, `qemu-system-x86_64` (KVM), `bsdtar`, `sgdisk` et `sudo` ou `doas`.
 
 ---
 
@@ -184,7 +199,7 @@ cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
 | `exec` | Exécuter une commande shell |
 | `read_file` | Lire un fichier |
 | `write_file` | Écrire/ajouter à un fichier |
-| `schedule_task` | Tâche ponctuelle à une heure donnée |
+| `schedule_task` | Tâche ponctuelle, dans N minutes ou à une heure donnée |
 | `schedule_recurring` | Tâche récurrente |
 | `list_tasks` | Lister les tâches planifiées |
 | `update_task` | Modifier une tâche |
@@ -195,7 +210,7 @@ cd vendor/smolbsd && ./startnb.sh -k kernels/netbsd-SMOL \
 | `get_fact` | Récupérer un fait |
 | `send_message` | Envoyer un message à un agent, au proprio, ou en broadcast |
 | `list_agents` | Lister les agents actifs |
-| `create_plugin` | Écrire + compiler un plugin C (builder uniquement) |
+| `create_plugin` | Écrire, compiler et tester un plugin C (builder uniquement) |
 | `clear_memory` | Effacer souvenirs/faits |
 
 Les plugins créés par les agents deviennent des outils disponibles pour tous immédiatement.
@@ -214,6 +229,15 @@ vous>   @all status                               => broadcast
 
 bot>    jarvis: CPU à 12%, tout va bien.
 bot>    oracle: Je vois 3 anomalies dans le log...
+```
+
+---
+
+## Vérifications
+
+```bash
+make check         # tests/check.c : HTTP, IRC, mentions, dates, arguments d'outils...
+make check-cosmo   # les mêmes vérifications compilées avec cosmocc
 ```
 
 ---

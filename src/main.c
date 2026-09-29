@@ -9,7 +9,6 @@
 #ifdef __COSMOPOLITAN__
 #include <cosmo.h>
 #endif
-#include <dirent.h>
 
 static void usage(void) {
     fprintf(stderr,
@@ -29,83 +28,43 @@ static void usage(void) {
         "\n", TC_VERSION);
 }
 
-static const char *find_socket(void) {
-    static char path[4200];
-    /* Try config first */
-    ini_t *cfg = ini_load("etc/config.ini");
-    if (cfg) {
-        const char *data_dir = ini_get(cfg, "daemon", "data_dir");
-        snprintf(path, sizeof(path), "%s/shclaw.sock",
-                 data_dir ? data_dir : "./data");
-        ini_free(cfg);
-    } else {
-        memcpy(path, "./data/shclaw.sock", sizeof("./data/shclaw.sock"));
-    }
-    return path;
-}
-
-static int cmd_status(void) {
-    int fd = sock_client_connect(find_socket());
+/* One request, optional one reply, for the short CLI commands */
+static int request(uint32_t cmd, const char *data, uint32_t len, int want_reply) {
+    int fd = sock_client_connect();
     if (fd < 0) { fprintf(stderr, "Cannot connect to daemon\n"); return 1; }
 
-    if (sock_send_cmd(fd, SOCK_CMD_STATUS, NULL, 0) != 0) {
-        fprintf(stderr, "Failed to request status\n");
+    if (sock_send(fd, cmd, data, len) != 0) {
+        fprintf(stderr, "Request failed\n");
         close(fd);
         return 1;
     }
-
-    uint32_t type;
-    char data[TC_BUF_LG];
-    if (sock_read_cmd(fd, &type, data, sizeof(data)) >= 0)
-        printf("%s\n", data);
-
-    close(fd);
-    return 0;
-}
-
-static int cmd_stop(void) {
-    int fd = sock_client_connect(find_socket());
-    if (fd < 0) { fprintf(stderr, "Cannot connect to daemon\n"); return 1; }
-
-    if (sock_send_cmd(fd, SOCK_CMD_STOP, NULL, 0) != 0) {
-        fprintf(stderr, "Failed to send stop signal\n");
-        close(fd);
-        return 1;
+    if (want_reply) {
+        uint32_t type;
+        char reply[TC_BUF_LG];
+        if (sock_read_cmd(fd, &type, reply, sizeof(reply)) >= 0)
+            printf("%s\n", reply);
     }
     close(fd);
-    printf("Stop signal sent.\n");
     return 0;
 }
 
 static int cmd_irc_info(void) {
-    int fd = sock_client_connect(find_socket());
-    if (fd < 0) {
-        /* Try reading the file directly */
-        char *data = file_slurp("data/irc.secret", NULL);
-        if (data) { printf("%s", data); free(data); return 0; }
-        fprintf(stderr, "Cannot connect to daemon and no irc.secret found\n");
-        return 1;
-    }
-
-    if (sock_send_cmd(fd, SOCK_CMD_IRC_INFO, NULL, 0) != 0) {
-        fprintf(stderr, "Failed to request IRC info\n");
+    int fd = sock_client_connect();
+    if (fd >= 0) {
         close(fd);
-        return 1;
+        return request(SOCK_CMD_IRC_INFO, NULL, 0, 1);
     }
-
-    uint32_t type;
-    char data[512];
-    if (sock_read_cmd(fd, &type, data, sizeof(data)) >= 0)
-        printf("%s", data);
-
-    close(fd);
-    return 0;
+    /* Daemon down: read the file it left behind */
+    char dir[4096], path[4200];
+    cli_data_dir(dir, sizeof(dir));
+    snprintf(path, sizeof(path), "%s/irc.secret", dir);
+    char *data = file_slurp(path, NULL);
+    if (data) { printf("%s", data); free(data); return 0; }
+    fprintf(stderr, "Cannot connect to daemon and no %s found\n", path);
+    return 1;
 }
 
 static int cmd_msg(const char *agent, const char *text) {
-    int fd = sock_client_connect(find_socket());
-    if (fd < 0) { fprintf(stderr, "Cannot connect to daemon\n"); return 1; }
-
     /* Format: agent_name\0text */
     char data[TC_BUF_LG];
     size_t agent_len = strlen(agent);
@@ -113,19 +72,12 @@ static int cmd_msg(const char *agent, const char *text) {
     size_t total = agent_len + 1 + text_len;
     if (total >= sizeof(data)) {
         fprintf(stderr, "Message too long\n");
-        close(fd);
         return 1;
     }
-    memcpy(data, agent, agent_len);
-    data[agent_len] = '\0';
+    memcpy(data, agent, agent_len + 1);
     memcpy(data + agent_len + 1, text, text_len);
-
-    if (sock_send_cmd(fd, SOCK_CMD_MSG, data, (uint32_t)total) != 0) {
-        fprintf(stderr, "Failed to send message\n");
-        close(fd);
+    if (request(SOCK_CMD_MSG, data, (uint32_t)total, 0) != 0)
         return 1;
-    }
-    close(fd);
     printf("Message sent to %s.\n", agent);
     return 0;
 }
@@ -138,24 +90,24 @@ static int cmd_compile(const char *src) {
         return 1;
     }
 #endif
-    plugin_registry_t tmp = {0};
+    static plugin_registry_t tmp;
     pthread_mutex_init(&tmp.lock, NULL);
 
     struct stat st;
     time_t mtime = (stat(src, &st) == 0) ? st.st_mtime : time(NULL);
+    char err[TC_BUF_LG];
 
-    if (plugin_compile(&tmp, src, mtime) == 0) {
-        printf("Compiled and loaded: %s (plugin: %s)\n", src, tmp.plugins[0].name);
-        if (tmp.plugins[0].tcc_state)
-            tcc_delete(tmp.plugins[0].tcc_state);
+    if (plugin_compile(&tmp, src, NULL, mtime, err, sizeof(err)) == 0) {
+        printf("Compiled and loaded: %s (plugin: %s)\n", src, err);
+        tcc_delete(tmp.plugins[0].tcc_state);
         return 0;
     }
-    fprintf(stderr, "Compilation failed.\n");
+    fprintf(stderr, "Compilation failed:\n%s\n", err);
     return 1;
 }
 #endif /* !TC_NO_PLUGINS */
 
-static volatile int *g_shutdown_ptr;
+static volatile sig_atomic_t *g_shutdown_ptr;
 static void shutdown_handler(int sig) {
     (void)sig;
     if (g_shutdown_ptr) *g_shutdown_ptr = 1;
@@ -186,9 +138,9 @@ static int cmd_daemon(int daemonize) {
         return 1;
     }
 
-    daemon_t d = {0};
+    /* ~1MB of state: keep it off the stack */
+    static daemon_t d;
 
-    /* Signal handling */
     signal(SIGPIPE, SIG_IGN);
 
     /* Graceful shutdown on SIGTERM/SIGINT */
@@ -199,9 +151,9 @@ static int cmd_daemon(int daemonize) {
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
 
-    daemon_run(&d, cfg);
+    int rc = daemon_run(&d, cfg);
     ini_free(cfg);
-    return 0;
+    return rc;
 }
 
 int main(int argc, char **argv) {
@@ -250,24 +202,29 @@ int main(int argc, char **argv) {
     if (argi >= argc)
         return cmd_daemon(0);
 
-    if (strcmp(argv[argi], "-d") == 0)
+    const char *cmd = argv[argi];
+
+    if (strcmp(cmd, "-d") == 0)
         return cmd_daemon(1);
 
-    if (strcmp(argv[argi], "status") == 0)
-        return cmd_status();
+    if (strcmp(cmd, "status") == 0)
+        return request(SOCK_CMD_STATUS, NULL, 0, 1);
 
-    if (strcmp(argv[argi], "stop") == 0)
-        return cmd_stop();
+    if (strcmp(cmd, "stop") == 0) {
+        if (request(SOCK_CMD_STOP, NULL, 0, 0) != 0) return 1;
+        printf("Stop signal sent.\n");
+        return 0;
+    }
 
-    if (strcmp(argv[argi], "irc-info") == 0)
+    if (strcmp(cmd, "irc-info") == 0)
         return cmd_irc_info();
 
-    if (strcmp(argv[argi], "msg") == 0) {
+    if (strcmp(cmd, "msg") == 0) {
         if (argi + 2 >= argc) { fprintf(stderr, "Usage: shclaw msg <agent> <text>\n"); return 1; }
         return cmd_msg(argv[argi + 1], argv[argi + 2]);
     }
 
-    if (strcmp(argv[argi], "compile") == 0) {
+    if (strcmp(cmd, "compile") == 0) {
 #ifndef TC_NO_PLUGINS
         if (argi + 1 >= argc) { fprintf(stderr, "Usage: shclaw compile <file.c>\n"); return 1; }
         return cmd_compile(argv[argi + 1]);
@@ -277,7 +234,7 @@ int main(int argc, char **argv) {
 #endif
     }
 
-    if (strcmp(argv[argi], "tui") == 0)
+    if (strcmp(cmd, "tui") == 0)
         return tui_run(argi + 1 < argc ? argv[argi + 1] : NULL);
 
     usage();
