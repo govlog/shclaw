@@ -166,28 +166,11 @@ static int builder_extract_code(const char *text,
     return 1;
 }
 
-/* ── System prompt ──────────────────────────────────────── */
+/* ── Prompt ─────────────────────────────────────────────── */
 
-static void build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
-                                const trigger_info_t *trig, const char *thread_id,
-                                char *out, size_t out_sz) {
-    char now[96], utc_str[32], loc_str[32];
-    time_t t = time(NULL);
-    format_time(t, 0, utc_str, sizeof(utc_str));
-    format_time(t, 1, loc_str, sizeof(loc_str));
-    /* Local time first: tools take local times */
-    if (strncmp(utc_str, loc_str, strlen(loc_str)) == 0)
-        snprintf(now, sizeof(now), "%s", utc_str);
-    else
-        snprintf(now, sizeof(now), "%s local time (UTC: %s)", loc_str, utc_str);
-
-    char *memories = malloc(TC_BUF_XL);
-    char schedule[TC_BUF_LG], facts[TC_BUF_LG];
-    if (memories)
-        memory_search(&agent->memory, NULL, 15, memories, TC_BUF_XL);
-    sched_list(&agent->scheduler, schedule, sizeof(schedule));
-    facts_get(&agent->memory, "", facts, sizeof(facts));
-
+/* Fixed for the agent (see PROMPT_SYSTEM_FMT): no time, memory or trigger
+ * in here, or every session misses the provider's prompt cache. */
+static void build_system_prompt(agent_ctx_t *agent, char *out, size_t out_sz) {
     /* Other agents, with their specialty */
     char agents_text[TC_BUF_LG] = "";
     size_t off = 0;
@@ -211,27 +194,54 @@ static void build_system_prompt(agent_ctx_t *agent, trigger_type_t trig_type,
         free(tmpl);
     }
 
-    char comm_rules[TC_BUF_LG];
-    snprintf(comm_rules, sizeof(comm_rules), "%s%s",
-             trig_type != TRIG_AGENT_MSG ? PROMPT_COMM_DIRECT :
-             trig->reply_batch ? PROMPT_COMM_AGENT_REPLY : PROMPT_COMM_AGENT_MSG,
-             trig->relay ? PROMPT_IRC_FORMAT : "");
-
     snprintf(out, out_sz, PROMPT_SYSTEM_FMT,
         agent->name, agent->personality, agent->system_prompt_extra,
         agent->is_hub ? PROMPT_HUB_ROLE : "",
         builder_rules,
-        trigger_type_str(trig_type),
-        thread_id && thread_id[0] ? thread_id : "(none)",
-        comm_rules,
         objectives[0] ? objectives : PROMPT_NONE,
-        agents_text[0] ? agents_text : PROMPT_NONE,
-        schedule[0] ? schedule : PROMPT_NONE,
-        facts[0] ? facts : PROMPT_NONE,
-        memories && memories[0] ? memories : PROMPT_NONE,
-        now
+        agents_text[0] ? agents_text : PROMPT_NONE
     );
+}
+
+/* The first user turn: what changes between sessions, then the trigger.
+ * Returns a malloc'd string, NULL when out of memory. */
+static char *build_first_turn(agent_ctx_t *agent, trigger_type_t trig_type,
+                              const trigger_info_t *trig, const char *trig_data) {
+    char now[96], utc_str[32], loc_str[32];
+    time_t t = time(NULL);
+    format_time(t, 0, utc_str, sizeof(utc_str));
+    format_time(t, 1, loc_str, sizeof(loc_str));
+    /* Local time first: tools take local times */
+    if (strncmp(utc_str, loc_str, strlen(loc_str)) == 0)
+        snprintf(now, sizeof(now), "%s", utc_str);
+    else
+        snprintf(now, sizeof(now), "%s local time (UTC: %s)", loc_str, utc_str);
+
+    char *message = render_trigger(trig_type, trig_data);
+    char *memories = malloc(TC_BUF_XL);
+    /* memories + schedule + facts + the fixed text all fit in this */
+    size_t cap = (message ? strlen(message) : 0) + TC_BUF_XL + 3 * TC_BUF_LG;
+    char *out = message && memories ? malloc(cap) : NULL;
+    if (out) {
+        char schedule[TC_BUF_LG], facts[TC_BUF_LG];
+        memory_search(&agent->memory, NULL, 15, memories, TC_BUF_XL);
+        sched_list(&agent->scheduler, schedule, sizeof(schedule));
+        facts_get(&agent->memory, "", facts, sizeof(facts));
+        snprintf(out, cap, PROMPT_FIRST_TURN_FMT,
+            trigger_type_str(trig_type),
+            trig_type != TRIG_AGENT_MSG ? PROMPT_COMM_DIRECT :
+            trig->reply_batch ? PROMPT_COMM_AGENT_REPLY : PROMPT_COMM_AGENT_MSG,
+            trig->relay ? PROMPT_IRC_FORMAT : "",
+            facts[0] ? facts : PROMPT_NONE,
+            schedule[0] ? schedule : PROMPT_NONE,
+            memories[0] ? memories : PROMPT_NONE,
+            now,
+            message
+        );
+    }
     free(memories);
+    free(message);
+    return out;
 }
 
 /* ── Tool calls ─────────────────────────────────────────── */
@@ -348,7 +358,9 @@ static const char *run_tool(agent_ctx_t *agent, cJSON *tools, tool_call_t *call,
 }
 
 /* Small local models have small context windows: once the tool outputs in
- * the history exceed the agent's budget, shrink the oldest ones. Only for
+ * the history exceed the agent's budget, shrink the oldest ones to half the
+ * budget. A trim rewrites the history, so the server must process it again
+ * instead of reusing its cache: trim rarely, and a lot at once. Only for
  * OpenAI-compatible providers — Anthropic histories stay append-only. */
 static void trim_history(cJSON *messages, size_t budget) {
     size_t total = 0;
@@ -358,6 +370,8 @@ static void trim_history(cJSON *messages, size_t budget) {
             const char *c = j_str(block, "content");
             if (c) total += strlen(c);
         }
+    if (total <= budget) return;
+    budget /= 2;
 
     cJSON *newest = cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1);
     cJSON_ArrayForEach(msg, messages) {
@@ -496,14 +510,14 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
 
     char *system_prompt = malloc(TC_BUF_HUGE);
     char *result_buf = malloc(TC_BUF_XL);
-    char *user_text = render_trigger(trig_type, trig_data);
+    char *first_turn = build_first_turn(agent, trig_type, &trig, trig_data);
     session_state_t *st = calloc(1, sizeof(*st));
-    if (!system_prompt || !result_buf || !user_text || !st) {
+    if (!system_prompt || !result_buf || !first_turn || !st) {
         log_error("[%s] out of memory", agent->name);
-        free(system_prompt); free(result_buf); free(user_text); free(st);
+        free(system_prompt); free(result_buf); free(first_turn); free(st);
         return SESSION_FAILED;
     }
-    build_system_prompt(agent, trig_type, &trig, thread_id, system_prompt, TC_BUF_HUGE);
+    build_system_prompt(agent, system_prompt, TC_BUF_HUGE);
 
     cJSON *tools = tools_to_json(agent->is_builder);
     if (agent->plugins) {
@@ -515,8 +529,8 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
     }
 
     cJSON *messages = cJSON_CreateArray();
-    add_user_text(messages, user_text);
-    free(user_text);
+    add_user_text(messages, first_turn);
+    free(first_turn);
 
     int max_turns = agent->max_turns > 0 ? agent->max_turns : TC_MAX_TURNS;
     int trim = agent->history_budget > 0 &&
@@ -538,6 +552,10 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
             outcome = SESSION_FAILED;
             break;
         }
+        if (resp.usage.input)   /* some local servers do not count */
+            log_info("[%s] Tokens: %d in (%d from cache, %d to cache), %d out",
+                     agent->name, resp.usage.input, resp.usage.cached,
+                     resp.usage.written, resp.usage.output);
 
         /* Log text blocks; relay replies (not thinking) to the owner */
         size_t text_len = 0;

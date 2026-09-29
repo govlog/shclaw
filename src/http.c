@@ -511,9 +511,12 @@ static int copy_response(const char *method, const char *url, http_response_t r,
         snprintf(buf, buf_sz, "HTTP error %d (%s)", r.status, http_strerror(r.status));
     /* Shown to the builder when it test-runs a plugin */
     if (http_trace_fd >= 0) {
-        char line[768];
-        int n = snprintf(line, sizeof(line), "[%s %s -> %d] %.*s", method, url,
-                         r.status, utf8_prefix(buf, 300), buf);
+        char line[768], cut[96] = "";
+        if (r.body && r.body_len >= buf_sz)
+            snprintf(cut, sizeof(cut), ", cut to %zu of %zu bytes: use a bigger buffer",
+                     buf_sz ? buf_sz - 1 : 0, r.body_len);
+        int n = snprintf(line, sizeof(line), "[%s %s -> %d%s] %.*s", method, url,
+                         r.status, cut, utf8_prefix(buf, 300), buf);
         if (n < 0) n = 0;
         if ((size_t)n > sizeof(line) - 2) n = (int)sizeof(line) - 2;
         for (int i = 0; i < n; i++)     /* one line per call */

@@ -179,6 +179,7 @@ typedef struct {
     char model[64];
     int  max_tokens;
     int  timeout;              /* seconds */
+    char cache_key[48];        /* OpenAI prompt_cache_key: one per agent */
 } provider_ref_t;
 
 typedef struct {
@@ -193,11 +194,19 @@ typedef struct {
 } tool_call_t;
 
 typedef struct {
+    int input;      /* prompt tokens, cached ones included */
+    int cached;     /* read from the provider's prompt cache */
+    int written;    /* written to it (Anthropic, OpenAI GPT-5.6+) */
+    int output;
+} llm_usage_t;
+
+typedef struct {
     text_block_t *text_blocks;
     int           n_text;
     tool_call_t  *tool_calls;
     int           n_tools;
     char          stop_reason[32];
+    llm_usage_t   usage;
     cJSON        *content;     /* assistant turn to replay (Anthropic blocks) */
     char          error[256];  /* set when llm_call() fails */
 } llm_response_t;

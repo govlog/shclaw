@@ -469,12 +469,21 @@ void plugin_scan(plugin_registry_t *r) {
     closedir(dir);
 }
 
+/* Sorted by name: the tools open the prompt prefix that providers cache,
+ * and the registry order changes when a plugin is removed. */
 cJSON *plugin_get_schemas(plugin_registry_t *r) {
     cJSON *arr = cJSON_CreateArray();
     pthread_mutex_lock(&r->lock);
     for (int i = 0; i < r->count; i++) {
-        if (r->plugins[i].schema)
-            cJSON_AddItemToArray(arr, cJSON_Duplicate(r->plugins[i].schema, 1));
+        if (!r->plugins[i].schema) continue;
+        const char *name = j_str(r->plugins[i].schema, "name");
+        int pos = 0;
+        cJSON *it;
+        cJSON_ArrayForEach(it, arr) {
+            if (strcmp(j_str(it, "name"), name) > 0) break;
+            pos++;
+        }
+        cJSON_InsertItemInArray(arr, pos, cJSON_Duplicate(r->plugins[i].schema, 1));
     }
     pthread_mutex_unlock(&r->lock);
     return arr;

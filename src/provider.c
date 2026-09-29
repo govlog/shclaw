@@ -101,6 +101,11 @@ static void add_tool_call(llm_response_t *out, const char *id,
 
 /* ── Anthropic ──────────────────────────────────────────── */
 
+static void add_cache_breakpoint(cJSON *obj) {
+    cJSON_AddStringToObject(cJSON_AddObjectToObject(obj, "cache_control"),
+                            "type", "ephemeral");
+}
+
 static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
                           cJSON *messages, cJSON *tools, llm_response_t *out) {
     int official = is_official(prov, "api.anthropic.com");
@@ -108,15 +113,22 @@ static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
     cJSON_AddStringToObject(payload, "model", prov->model);
     cJSON_AddNumberToObject(payload, "max_tokens",
                             prov->max_tokens > 0 ? prov->max_tokens : 16000);
-    cJSON_AddStringToObject(payload, "system", system_prompt);
     cJSON_AddItemReferenceToObject(payload, "messages", messages);
     if (tools && cJSON_GetArraySize(tools) > 0)
         cJSON_AddItemReferenceToObject(payload, "tools", tools);
-    /* Tools and system prompt are fixed for a session: cache the prefix so
-     * each tool round only pays full price for what it appends. */
-    if (official)
-        cJSON_AddStringToObject(cJSON_AddObjectToObject(payload, "cache_control"),
-                                "type", "ephemeral");
+    if (official) {
+        /* Tools + system prompt are fixed for the agent: a breakpoint after
+         * them lets the next sessions reuse them, and the automatic one
+         * caches the conversation as it grows. */
+        cJSON *block = cJSON_CreateObject();
+        cJSON_AddStringToObject(block, "type", "text");
+        cJSON_AddStringToObject(block, "text", system_prompt);
+        add_cache_breakpoint(block);
+        cJSON_AddItemToArray(cJSON_AddArrayToObject(payload, "system"), block);
+        add_cache_breakpoint(payload);
+    } else {
+        cJSON_AddStringToObject(payload, "system", system_prompt);
+    }
 
     char *json = cJSON_PrintUnformatted(payload);
     cJSON_Delete(payload);
@@ -147,6 +159,13 @@ static int call_anthropic(provider_ref_t *prov, const char *system_prompt,
     const char *stop = j_str(root, "stop_reason");
     snprintf(out->stop_reason, sizeof(out->stop_reason), "%s",
              stop ? stop : "end_turn");
+
+    cJSON *usage = cJSON_GetObjectItem(root, "usage");
+    out->usage.cached = j_int(usage, "cache_read_input_tokens", 0);
+    out->usage.written = j_int(usage, "cache_creation_input_tokens", 0);
+    out->usage.input = j_int(usage, "input_tokens", 0) + out->usage.cached +
+                       out->usage.written;
+    out->usage.output = j_int(usage, "output_tokens", 0);
 
     /* Replay the content exactly as received: thinking blocks carry
      * signatures that must come back unchanged on the next request. */
@@ -354,6 +373,10 @@ static int call_openai(provider_ref_t *prov, const char *system_prompt,
                                                  : (official ? 16000 : 4096));
     if (tools && cJSON_GetArraySize(tools) > 0)
         cJSON_AddItemToObject(payload, "tools", convert_tools_to_openai(tools));
+    /* Caching is automatic; the key keeps an agent's requests on the
+     * servers that hold its prefix */
+    if (official && prov->cache_key[0])
+        cJSON_AddStringToObject(payload, "prompt_cache_key", prov->cache_key);
 
     char *json = cJSON_PrintUnformatted(payload);
     cJSON_Delete(payload);
@@ -385,6 +408,13 @@ static int call_openai(provider_ref_t *prov, const char *system_prompt,
     }
     const char *finish = j_str(choice, "finish_reason");
     cJSON *tool_calls = cJSON_GetObjectItem(message, "tool_calls");
+
+    cJSON *usage = cJSON_GetObjectItem(root, "usage");
+    cJSON *details = cJSON_GetObjectItem(usage, "prompt_tokens_details");
+    out->usage.input = j_int(usage, "prompt_tokens", 0);
+    out->usage.cached = j_int(details, "cached_tokens", 0);
+    out->usage.written = j_int(details, "cache_write_tokens", 0);
+    out->usage.output = j_int(usage, "completion_tokens", 0);
     int n_calls = cJSON_GetArraySize(tool_calls);
 
     out->text_blocks = calloc(3, sizeof(text_block_t));

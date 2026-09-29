@@ -150,6 +150,7 @@ static void load_agent(daemon_t *d, const char *ini_path) {
         ini_free(acfg);
         return;
     }
+    snprintf(a->provider.cache_key, sizeof(a->provider.cache_key), "shclaw-%s", name);
 
     a->max_turns = ini_get_int(acfg, "agent", "max_turns", TC_MAX_TURNS);
     a->history_budget = ini_get_int(acfg, "agent", "history_budget", 0);

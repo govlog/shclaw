@@ -28,17 +28,26 @@ static void check_dechunk(void) {
     CHECK(n == 3 && strcmp(evil, "abc") == 0, "huge chunk not clamped: %zu", n);
 }
 
-/* Local HTTP server: /a redirects to "b?x=1", anything else echoes its
- * request line in a chunked body. Serves n requests, then exits. */
-static pid_t http_server(int n, int *port) {
+/* Listening socket on a free loopback port */
+static int listen_local(int *port) {
     int s = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = { .sin_family = AF_INET };
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     socklen_t alen = sizeof(a);
     if (bind(s, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(s, 8) != 0 ||
-        getsockname(s, (struct sockaddr *)&a, &alen) != 0)
+        getsockname(s, (struct sockaddr *)&a, &alen) != 0) {
+        close(s);
         return -1;
+    }
     *port = ntohs(a.sin_port);
+    return s;
+}
+
+/* Local HTTP server: /a redirects to "b?x=1", anything else echoes its
+ * request line in a chunked body. Serves n requests, then exits. */
+static pid_t http_server(int n, int *port) {
+    int s = listen_local(port);
+    if (s < 0) return -1;
     pid_t pid = fork();
     if (pid == 0) {
         for (int i = 0; i < n; i++) {
@@ -82,6 +91,95 @@ static void check_http(void) {
         http_response_free(&r);
     }
     waitpid(srv, NULL, 0);
+}
+
+/* Fake OpenAI server: saves request i to <dir>/req<i>.json and answers
+ * "ok". Serves n requests, then exits. */
+static pid_t llm_server(int n, const char *dir, int *port) {
+    int s = listen_local(port);
+    if (s < 0) return -1;
+    pid_t pid = fork();
+    if (pid == 0) {
+        static char req[4 * TC_BUF_HUGE];
+        const char *reply = "{\"choices\":[{\"message\":{\"role\":\"assistant\","
+                            "\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}";
+        for (int i = 0; i < n; i++) {
+            int c = accept(s, NULL, NULL);
+            size_t len = 0, want = 0;
+            char *body = NULL;
+            ssize_t r;
+            while ((!body || len - (size_t)(body - req) < want) &&
+                   (r = read(c, req + len, sizeof(req) - 1 - len)) > 0) {
+                req[len += (size_t)r] = '\0';
+                if (!body && (body = strstr(req, "\r\n\r\n")) != NULL) {
+                    const char *cl = strstr(req, "Content-Length: ");
+                    want = cl ? strtoul(cl + 16, NULL, 10) : 0;
+                    body += 4;
+                }
+            }
+            char path[4200], resp[512];
+            snprintf(path, sizeof(path), "%s/req%d.json", dir, i);
+            if (body) atomic_write(path, body, len - (size_t)(body - req), 0600);
+            snprintf(resp, sizeof(resp), "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n%s",
+                     strlen(reply), reply);
+            write_all(c, resp, strlen(resp));
+            close(c);
+        }
+        _exit(0);
+    }
+    close(s);
+    return pid;
+}
+
+/* Tools + system prompt open every request: they must stay byte-identical
+ * from one session to the next, or no provider can reuse its cache. */
+static void check_prompt_cache(const char *tmp) {
+    int port;
+    pid_t srv = llm_server(2, tmp, &port);
+    CHECK(srv > 0, "cannot start the fake LLM server");
+    if (srv <= 0) return;
+
+    static agent_ctx_t a;              /* large: not on the stack */
+    static session_store_t sessions;
+    char path[4200], out[256];
+    snprintf(a.name, sizeof(a.name), "tester");
+    snprintf(a.provider.provider_type, sizeof(a.provider.provider_type), "openai");
+    snprintf(a.provider.base_url, sizeof(a.provider.base_url), "http://127.0.0.1:%d", port);
+    snprintf(a.provider.model, sizeof(a.provider.model), "test");
+    snprintf(path, sizeof(path), "%s/tester-memory", tmp);
+    memory_init(&a.memory, path);
+    snprintf(path, sizeof(path), "%s/tester-schedule.json", tmp);
+    scheduler_init(&a.scheduler, path);
+    snprintf(path, sizeof(path), "%s/tester-sessions", tmp);
+    session_store_init(&sessions, path);
+    a.sessions = &sessions;
+
+    agent_run_session(&a, TRIG_IRC, "hello", "t1");
+    memory_add(&a.memory, "Owner likes tea", "person", 5, NULL, out, sizeof(out));
+    agent_run_session(&a, TRIG_IRC, "bye", "t2");
+    waitpid(srv, NULL, 0);
+
+    char *prefix[2], *turn[2];
+    for (int i = 0; i < 2; i++) {
+        snprintf(path, sizeof(path), "%s/req%d.json", tmp, i);
+        char *body = file_slurp(path, NULL);
+        cJSON *req = cJSON_Parse(body ? body : "");
+        cJSON *msgs = cJSON_GetObjectItem(req, "messages");
+        cJSON *head = cJSON_CreateArray();
+        cJSON_AddItemReferenceToArray(head, cJSON_GetObjectItem(req, "tools"));
+        cJSON_AddItemReferenceToArray(head, cJSON_GetArrayItem(msgs, 0));
+        prefix[i] = cJSON_PrintUnformatted(head);
+        const char *content = j_str(cJSON_GetArrayItem(msgs, 1), "content");
+        turn[i] = strdup(content ? content : "");
+        cJSON_Delete(head);
+        cJSON_Delete(req);
+        free(body);
+    }
+    CHECK(prefix[0] && prefix[1] && strlen(prefix[0]) > 1000 && !strcmp(prefix[0], prefix[1]),
+          "tools + system prompt changed between sessions");
+    CHECK(strstr(turn[1], "likes tea") && strstr(turn[1], "bye") && !strstr(turn[0], "likes tea"),
+          "memories and trigger not in the first user turn:\n%s", turn[1]);
+    for (int i = 0; i < 2; i++) { free(prefix[i]); free(turn[i]); }
 }
 
 static const char AGENTS[3][32] = { "jarvis", "Oracle", "builder" };
@@ -261,6 +359,23 @@ static void check_plugins(const char *tmp) {
     plugin_scan(&r);
     CHECK(!plugin_execute(&r, "crash", NULL, 0, out, sizeof(out)),
           "deleted plugin still loaded");
+
+    /* create_plugin with newlines escaped twice (one line, literal \n),
+     * as gpt-4.1-nano sent it */
+    static agent_ctx_t a;
+    a.plugins = &r;
+    cJSON *input = cJSON_CreateObject();
+    cJSON_AddStringToObject(input, "name", "twice");
+    cJSON_AddStringToObject(input, "code",
+        "#include \"tc_plugin.h\"\\n"
+        "const char *TC_PLUGIN_NAME = \"twice\";\\n"
+        "const char *TC_PLUGIN_DESC = \"test\";\\n"
+        "const char *tc_execute(const char *in) { (void)in; return \"a\\\\nb\"; }\\n");
+    res = execute_tool(TOOL_CREATE_PLUGIN, input, &a, out, sizeof(out));
+    cJSON_Delete(input);
+    CHECK(!strncmp(res, "Plugin 'twice' compiled", 23), "twice-escaped code: %s", res);
+    res = plugin_execute(&r, "twice", NULL, 0, out, sizeof(out));
+    CHECK(res && !strcmp(res, "a\nb"), "twice-escaped string literal: '%s'", res ? res : "(null)");
 }
 
 /* ── IRC over a socketpair (no TLS) ── */
@@ -351,6 +466,7 @@ int main(void) {
     check_exec();
     check_plugins(tmp);
     check_irc();
+    check_prompt_cache(tmp);
 
     char cmd[4200];
     snprintf(cmd, sizeof(cmd), "/bin/rm -rf %s", tmp);

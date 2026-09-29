@@ -12,7 +12,7 @@ Each trigger starts a session in its own thread. An agent runs one session at a 
 - inter-agent mail and due tasks stay on disk until the agent is free, so nothing is lost or truncated while it works;
 - plugin sources are rescanned every 5 seconds.
 
-In a session, the agent builds a system prompt from its personality, facts, recent memories, schedule and peer list, then loops with the LLM provider until it answers without calling a tool (default limit: 100 turns).
+In a session, the agent sends a system prompt that only changes with its configuration (personality, rules, objectives, peer list, plugin template for the builder) and a first user turn with the session context (communication rules, facts, schedule, recent memories, time) followed by the trigger. It then loops with the LLM provider until it answers without calling a tool (default limit: 100 turns).
 
 ## How the harness helps small models
 
@@ -26,17 +26,29 @@ Small models loop, invent tools and send broken arguments. The session loop catc
 - a due task is presented as "do it now", and a one-shot task in the past is refused (models used to reschedule a due reminder instead of delivering it);
 - `schedule_task` takes `in_minutes`, which small models get right far more often than absolute dates.
 
-With Anthropic, the assistant turns are replayed exactly as received (thinking blocks keep their signatures) and the history is append-only. The request enables automatic prompt caching, so each tool round only pays full price for what it adds. With OpenAI-compatible providers, `history_budget` shortens old tool outputs when a session outgrows a small context window. Both providers retry connection errors, 408, 409, 429 and 5xx twice, honouring `Retry-After`.
+With Anthropic, the assistant turns are replayed exactly as received (thinking blocks keep their signatures) and the history is append-only. With OpenAI-compatible providers, `history_budget` shortens old tool outputs when a session outgrows a small context window. Both providers retry connection errors, 408, 409, 429 and 5xx twice, honouring `Retry-After`.
+
+## How prompts stay cacheable
+
+A provider reuses the work already done on a prompt prefix it has seen: Anthropic and OpenAI bill those tokens at a fraction of the price (often a tenth), and a local server (Ollama, llama.cpp) does not compute them again, which matters most on a CPU. Each request keeps that prefix as long as possible:
+
+- the tools come first: built-in tools in a fixed order, then plugins sorted by name. The system prompt follows and holds nothing that changes between sessions;
+- the first user turn goes from the most stable part to the most volatile: trigger type and communication rules, facts, schedule, recent memories, time, then the message. Before GPT-5.6, OpenAI reuses its cache only when few tokens follow the first difference with an earlier request (on gpt-4.1-nano: a hit with 50 tokens after it, a miss with 100), so the time and the message come last;
+- the history only grows, except with `history_budget`: it shortens old tool outputs down to half the budget in one go, so the prefix changes rarely;
+- Anthropic: a cache breakpoint closes the system prompt, so the next sessions reuse tools and system prompt; automatic caching covers the conversation. OpenAI: `prompt_cache_key` is `shclaw-<agent>`. Agents share the same tools at the head of the prompt, so without the key they share one routing bucket (about 15 requests per minute) and overflow to servers without their cache.
+
+Each model call logs its usage, e.g. `[oracle] Tokens: 1430 in (1280 from cache, 0 to cache), 8 out`. A prefix under the provider minimum is never cached: 1024 tokens for OpenAI, 512 to 4096 for Claude depending on the model.
 
 ## How plugins get compiled
 
 shclaw embeds [TinyCC](https://bellard.org/tcc/) (libtcc) as a library. When an agent calls `create_plugin`, the daemon:
 
-1. Compiles the source once in a forked child, so a compiler crash on bad input, or a bad symbol, cannot take the daemon down
-2. Compiles it in memory with `tcc_compile_string()` and relocates it with `tcc_relocate()`
-3. Resolves `TC_PLUGIN_NAME`, `tc_execute`, the description and the optional schema with `tcc_get_symbol()`
-4. Writes the `.c` source to `plugins/` only then: a failed attempt never replaces a working plugin
-5. Runs it once with `test_input`, if given, and reports the output and the HTTP calls
+1. Decodes the source once more if it arrives on one line with literal `\n` (small models sometimes escape the code twice)
+2. Compiles the source once in a forked child, so a compiler crash on bad input, or a bad symbol, cannot take the daemon down
+3. Compiles it in memory with `tcc_compile_string()` and relocates it with `tcc_relocate()`
+4. Resolves `TC_PLUGIN_NAME`, `tc_execute`, the description and the optional schema with `tcc_get_symbol()`
+5. Writes the `.c` source to `plugins/` only then: a failed attempt never replaces a working plugin
+6. Runs it once with `test_input`, if given, and reports the output and the HTTP calls, with a note when a response did not fit the plugin's buffer
 
 No `.so` is ever written to disk. On restart, `plugin_scan()` recompiles all `.c` files. Changed files are detected by mtime, and deleted ones are unloaded, every 5 seconds.
 

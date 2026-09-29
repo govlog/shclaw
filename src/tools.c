@@ -386,6 +386,25 @@ static int test_plugin(agent_ctx_t *ctx, const char *tool, const char *test,
     return failed ? -1 : 0;
 }
 
+/* Decode \n \t \r \" and \\ in place; other characters are kept */
+static void unescape_once(char *s) {
+    char *w = s;
+    for (const char *r = s; *r; r++) {
+        char c = *r;
+        if (c == '\\') {
+            switch (r[1]) {
+            case 'n':  c = '\n'; r++; break;
+            case 't':  c = '\t'; r++; break;
+            case 'r':  c = '\r'; r++; break;
+            case '"':  c = '"';  r++; break;
+            case '\\': c = '\\'; r++; break;
+            }
+        }
+        *w++ = c;
+    }
+    *w = '\0';
+}
+
 static void clear_agent(agent_ctx_t *a, int mem, int facts) {
     if (mem) memory_clear(&a->memory);
     if (facts) facts_clear(&a->memory);
@@ -540,6 +559,10 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
     case TOOL_CREATE_PLUGIN: {
         char name[80];
         const char *code = j_str(input, "code");
+        /* Weak models sometimes escape the code twice. One line with a
+         * literal "\n" cannot be C: decode the escapes once more. */
+        if (code && !strchr(code, '\n') && strstr(code, "\\n"))
+            unescape_once(cJSON_GetObjectItem(input, "code")->valuestring);
         snprintf(name, sizeof(name), "%s", j_str(input, "name"));
         size_t nlen = strlen(name);
         if (nlen > 2 && strcmp(name + nlen - 2, ".c") == 0)

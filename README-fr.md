@@ -62,8 +62,8 @@ Un setup typique : un hub (modèle pas cher/local), un agent recherche (modèle 
 
 Chaque agent a deux couches de persistance :
 
-- **Souvenirs** -- Log en append-only avec catégories, scores d'importance et tags. Recherchés via `recall`. Les souvenirs récents sont inclus dans le prompt système.
-- **Faits** -- Paires clé-valeur permanentes (ex : `timezone = Europe/Paris`). Toujours dans le prompt système. Peu nombreux, précis, jamais supprimés.
+- **Souvenirs** -- Log en append-only avec catégories, scores d'importance et tags. Recherchés via `recall`. Les souvenirs récents sont donnés à l'agent au début de chaque session.
+- **Faits** -- Paires clé-valeur permanentes (ex : `timezone = Europe/Paris`). Donnés au début de chaque session. Peu nombreux, précis, jamais supprimés.
 
 ### Plugins à la volée
 
@@ -149,9 +149,9 @@ Autres clés :
 |---------|-----|--------|------|
 | `[provider.*]` | `max_tokens` | 16000 (APIs officielles), 4096 (autres) | Limite de sortie par appel au modèle |
 | `[provider.*]` | `timeout` | 600 | Secondes sans données avant l'échec d'un appel au modèle |
-| `[agent]` | `history_budget` | 0 (désactivé) | Caractères de sorties d'outils gardés dans une session ; les plus anciennes sont raccourcies. Pour les petites fenêtres de contexte, fournisseurs compatibles OpenAI seulement |
+| `[agent]` | `history_budget` | 0 (désactivé) | Caractères de sorties d'outils gardés dans une session ; au-delà, les plus anciennes sont raccourcies jusqu'à la moitié du budget. Pour les petites fenêtres de contexte, fournisseurs compatibles OpenAI seulement |
 
-Pour Ollama, augmentez aussi la taille de contexte du serveur (`OLLAMA_CONTEXT_LENGTH=16384` ou plus) : avec la valeur par défaut, le prompt système et la liste des outils ne tiennent pas et le modèle perd ses instructions sans prévenir.
+Pour Ollama, augmentez aussi la taille de contexte du serveur (`OLLAMA_CONTEXT_LENGTH=16384` ou plus) : avec la valeur par défaut, le prompt système et la liste des outils ne tiennent pas et le modèle perd ses instructions sans prévenir. Pour garder le prompt de chaque agent dans le cache du serveur entre deux sessions, mettez `OLLAMA_NUM_PARALLEL` au moins au nombre d'agents sur le modèle (chaque slot coûte un contexte de mémoire) et `OLLAMA_KEEP_ALIVE` plus long que l'écart entre les sessions (défaut : 5m).
 
 ### Lancer
 

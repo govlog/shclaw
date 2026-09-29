@@ -12,7 +12,7 @@ Chaque déclencheur lance une session dans son propre thread. Un agent traite un
 - le courrier inter-agents et les tâches échues restent sur le disque jusqu'à ce que l'agent soit libre : rien n'est perdu ni tronqué pendant qu'il travaille ;
 - les sources des plugins sont rescannées toutes les 5 secondes.
 
-Dans une session, l'agent construit un prompt système à partir de sa personnalité, de ses faits, de ses souvenirs récents, de son planning et de la liste de ses pairs, puis boucle avec le LLM jusqu'à ce qu'il réponde sans appeler d'outil (limite par défaut : 100 tours).
+Dans une session, l'agent envoie un prompt système qui ne change qu'avec sa configuration (personnalité, règles, objectifs, liste des pairs, modèle de plugin pour le builder) et un premier tour utilisateur avec le contexte de la session (règles de communication, faits, planning, souvenirs récents, heure) suivi du déclencheur. Il boucle ensuite avec le LLM jusqu'à ce qu'il réponde sans appeler d'outil (limite par défaut : 100 tours).
 
 ## Comment le harnais aide les petits modèles
 
@@ -26,17 +26,29 @@ Les petits modèles bouclent, inventent des outils et envoient des arguments cas
 - une tâche échue est présentée comme « à faire maintenant », et une tâche ponctuelle dans le passé est refusée (les modèles reprogrammaient un rappel échu au lieu de le délivrer) ;
 - `schedule_task` accepte `in_minutes`, que les petits modèles remplissent bien plus souvent correctement qu'une date absolue.
 
-Avec Anthropic, les tours de l'assistant sont rejoués tels que reçus (les blocs de réflexion gardent leur signature) et l'historique ne fait que s'allonger. La requête active le cache de prompt automatique : chaque tour d'outils ne paie plein tarif que ce qu'il ajoute. Avec les fournisseurs compatibles OpenAI, `history_budget` raccourcit les anciennes sorties d'outils quand une session dépasse une petite fenêtre de contexte. Les deux fournisseurs réessaient deux fois les erreurs de connexion, 408, 409, 429 et 5xx, en respectant `Retry-After`.
+Avec Anthropic, les tours de l'assistant sont rejoués tels que reçus (les blocs de réflexion gardent leur signature) et l'historique ne fait que s'allonger. Avec les fournisseurs compatibles OpenAI, `history_budget` raccourcit les anciennes sorties d'outils quand une session dépasse une petite fenêtre de contexte. Les deux fournisseurs réessaient deux fois les erreurs de connexion, 408, 409, 429 et 5xx, en respectant `Retry-After`.
+
+## Comment les prompts restent en cache
+
+Un fournisseur réutilise le travail déjà fait sur un début de prompt qu'il a déjà vu : Anthropic et OpenAI facturent ces tokens une fraction du prix (souvent un dixième), et un serveur local (Ollama, llama.cpp) ne les recalcule pas, ce qui compte surtout sur CPU. Chaque requête garde ce préfixe aussi long que possible :
+
+- les outils viennent en premier : outils intégrés dans un ordre fixe, puis plugins triés par nom. Le prompt système suit et ne contient rien qui change d'une session à l'autre ;
+- le premier tour utilisateur va du plus stable au plus variable : type de déclencheur et règles de communication, faits, planning, souvenirs récents, heure, puis le message. Avant GPT-5.6, OpenAI ne réutilise son cache que si peu de tokens suivent la première différence avec une requête précédente (sur gpt-4.1-nano : succès avec 50 tokens après, échec avec 100), d'où l'heure et le message en dernier ;
+- l'historique ne fait que s'allonger, sauf avec `history_budget` : il raccourcit les anciennes sorties d'outils jusqu'à la moitié du budget en une fois, donc le préfixe change rarement ;
+- Anthropic : un point de cache ferme le prompt système, donc les sessions suivantes réutilisent outils et prompt système ; le cache automatique couvre la conversation. OpenAI : `prompt_cache_key` vaut `shclaw-<agent>`. Les agents ont les mêmes outils en tête de prompt ; sans la clé, ils partagent un seul groupe de routage (environ 15 requêtes par minute) et débordent vers des serveurs qui n'ont pas leur cache.
+
+Chaque appel au modèle journalise sa consommation, par exemple `[oracle] Tokens: 1430 in (1280 from cache, 0 to cache), 8 out`. Un préfixe sous le minimum du fournisseur n'est jamais mis en cache : 1024 tokens chez OpenAI, 512 à 4096 chez Claude selon le modèle.
 
 ## Compilation des plugins
 
 shclaw embarque [TinyCC](https://bellard.org/tcc/) (libtcc) comme bibliothèque. Quand un agent appelle `create_plugin`, le daemon :
 
-1. Compile le source une première fois dans un processus fils : un plantage du compilateur sur une entrée tordue, ou un symbole invalide, ne fait pas tomber le daemon
-2. Le compile en mémoire avec `tcc_compile_string()` et le reloge avec `tcc_relocate()`
-3. Résout `TC_PLUGIN_NAME`, `tc_execute`, la description et le schéma optionnel avec `tcc_get_symbol()`
-4. N'écrit le source `.c` dans `plugins/` qu'à ce moment : une tentative ratée ne remplace jamais un plugin qui marche
-5. Le lance une fois avec `test_input`, si fourni, et renvoie la sortie et les appels HTTP
+1. Décode le source une fois de plus s'il arrive sur une seule ligne avec des `\n` littéraux (les petits modèles échappent parfois le code deux fois)
+2. Compile le source une première fois dans un processus fils : un plantage du compilateur sur une entrée tordue, ou un symbole invalide, ne fait pas tomber le daemon
+3. Le compile en mémoire avec `tcc_compile_string()` et le reloge avec `tcc_relocate()`
+4. Résout `TC_PLUGIN_NAME`, `tc_execute`, la description et le schéma optionnel avec `tcc_get_symbol()`
+5. N'écrit le source `.c` dans `plugins/` qu'à ce moment : une tentative ratée ne remplace jamais un plugin qui marche
+6. Le lance une fois avec `test_input`, si fourni, et renvoie la sortie et les appels HTTP, avec une note quand une réponse ne tenait pas dans le buffer du plugin
 
 Aucun `.so` n'est écrit sur le disque. Au redémarrage, `plugin_scan()` recompile tous les `.c`. Toutes les 5 secondes, les fichiers modifiés (détectés par mtime) sont recompilés et les fichiers supprimés sont déchargés.
 

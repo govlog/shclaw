@@ -62,8 +62,8 @@ A typical setup: a hub (cheap/local model), a research agent (standard model), a
 
 Each agent has two persistence layers:
 
-- **Memories** -- Append-only log with categories, importance scores, and tags. Searched via `recall`. Recent memories are included in the system prompt.
-- **Facts** -- Permanent key-value pairs (e.g. `timezone = Europe/Paris`). Always in the system prompt. Few, precise, never pruned.
+- **Memories** -- Append-only log with categories, importance scores, and tags. Searched via `recall`. Recent memories are given to the agent at the start of each session.
+- **Facts** -- Permanent key-value pairs (e.g. `timezone = Europe/Paris`). Given at the start of every session. Few, precise, never pruned.
 
 ### Runtime plugins
 
@@ -149,9 +149,9 @@ Other keys:
 |---------|-----|---------|---------|
 | `[provider.*]` | `max_tokens` | 16000 (official APIs), 4096 (others) | Output limit per model call |
 | `[provider.*]` | `timeout` | 600 | Seconds without data before a model call fails |
-| `[agent]` | `history_budget` | 0 (off) | Characters of tool output kept in a session; older outputs are shortened. For small context windows, OpenAI-compatible providers only |
+| `[agent]` | `history_budget` | 0 (off) | Characters of tool output kept in a session; past it, the oldest outputs are shortened down to half the budget. For small context windows, OpenAI-compatible providers only |
 
-For Ollama, also raise the server context size (`OLLAMA_CONTEXT_LENGTH=16384` or more): with the default, the system prompt and tool list do not fit and the model silently loses its instructions.
+For Ollama, also raise the server context size (`OLLAMA_CONTEXT_LENGTH=16384` or more): with the default, the system prompt and tool list do not fit and the model silently loses its instructions. To keep each agent's prompt in the server cache between sessions, set `OLLAMA_NUM_PARALLEL` to at least the number of agents on the model (each slot costs one context of memory) and `OLLAMA_KEEP_ALIVE` longer than the gaps between sessions (default: 5m).
 
 ### Run
 

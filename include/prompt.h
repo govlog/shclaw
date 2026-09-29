@@ -19,7 +19,6 @@
     "If you delegate, call send_message immediately.\n\n"
 
 #define PROMPT_TRIGGER_HEADER     "## Trigger\nType: %s\n\n"
-#define PROMPT_THREAD_HEADER      "## Active thread: %s\n"
 #define PROMPT_OBJECTIVES_HEADER  "## Objectives\n%s\n"
 #define PROMPT_AGENTS_HEADER      "## Other agents\n%s\n"
 #define PROMPT_SCHEDULE_HEADER    "## Scheduled tasks\n%s\n"
@@ -37,7 +36,7 @@
         "\"" TC_EMPTY_OUTPUT_MARKER "\", report it as-is.\n" \
     "5. Never invent an expected result or fabricate missing output.\n\n"
 
-#define PROMPT_NOW                "## Now\n%s\nAct.\n"
+#define PROMPT_NOW                "## Now\n%s\n\n"
 
 #define PROMPT_NONE               "None.\n"
 
@@ -74,7 +73,7 @@
     "To contact ANOTHER AGENT: use send_message.\n" \
     "Do NOT use send_message(to='owner') — it is redundant.\n\n"
 
-/* Appended to comm rules when the reply is relayed to IRC. */
+/* Follows the comm rules when the reply is relayed to IRC. */
 #define PROMPT_IRC_FORMAT \
     "## IRC Output Format\n" \
     "You are an IRC assistant. Your text reply is relayed to a chat channel.\n" \
@@ -156,21 +155,30 @@
 #define PROMPT_STUCK              "(stopped: the model kept repeating the same tool call)"
 #define PROMPT_MAX_TURNS          "(stopped after %d turns without finishing)"
 
-/* ── System prompt format (all sections assembled) ─────── */
+/* ── Prompt assembly ───────────────────────────────────── */
 
+/* The system prompt is fixed for the agent: with the tools, it is the
+ * prefix that providers cache across turns and sessions. Anything that
+ * changes between sessions goes to the first user turn instead. */
 #define PROMPT_SYSTEM_FMT \
     PROMPT_IDENTITY \
     "%s"  /* hub role (or empty) */ \
     "%s"  /* builder rules (or empty) */ \
-    PROMPT_TRIGGER_HEADER \
-    PROMPT_THREAD_HEADER \
-    "%s"  /* comm rules */ \
     PROMPT_OBJECTIVES_HEADER \
     PROMPT_AGENTS_HEADER \
-    PROMPT_SCHEDULE_HEADER \
+    PROMPT_RULES
+
+/* The first user turn, from the most stable part to the most volatile:
+ * servers reuse their cache up to the first byte that differs from an
+ * earlier request, and OpenAI only when little follows that byte. */
+#define PROMPT_FIRST_TURN_FMT \
+    PROMPT_TRIGGER_HEADER \
+    "%s"  /* comm rules */ \
+    "%s"  /* IRC format (or empty) */ \
     PROMPT_FACTS_HEADER \
+    PROMPT_SCHEDULE_HEADER \
     PROMPT_MEMORIES_HEADER \
-    PROMPT_RULES \
-    PROMPT_NOW
+    PROMPT_NOW \
+    "## Message\n%s"
 
 #endif /* PROMPT_H */
