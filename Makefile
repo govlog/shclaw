@@ -23,6 +23,9 @@ CF_PROT := $(if $(filter x86_64 i686 i386,$(ARCH)),-fcf-protection,)
 # TinyCC keeps the i386 stack 4-byte aligned, gcc code expects 16 bytes
 # (SSE): the functions that plugins call must realign it on entry
 REALIGN := $(if $(filter i686 i386,$(ARCH)),-mstackrealign,)
+# NetBSD (PaX MPROTECT) never lets written pages become executable: TinyCC
+# maps its code from a temporary file twice instead, RX and RW
+TCC_DEFS := $(if $(filter NetBSD,$(shell uname -s)),-DCONFIG_SELINUX,)
 
 ifeq ($(filter x86_64 aarch64 i686 i386,$(ARCH)),)
   STATIC := -static
@@ -105,7 +108,7 @@ help:
 	@echo "  make musl           Build static Linux binary (~530K)"
 	@echo "  make cosmo          Build multi-platform binary (~970K)"
 	@echo "                      Runs on Linux/FreeBSD/NetBSD (x86_64); OpenBSD: make native"
-	@echo "  make native         Build static binary with cc (FreeBSD/OpenBSD, run with gmake)"
+	@echo "  make native         Build static binary with cc (Free/Net/OpenBSD, run with gmake)"
 	@echo "  make check          Run tests/check.c (check-cosmo, check-native: other toolchains)"
 	@echo "  make install        Install to PREFIX (default: /opt/shclaw)"
 	@echo "  make dist           Release archives of the built binaries, in dist/"
@@ -151,7 +154,7 @@ vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
 	cd vendor/tcc && ./configure --cc=$(MUSL_CC)
 	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) \
-		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
+		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 $(TCC_DEFS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
 # -------------------------------------------------------------------
@@ -204,12 +207,16 @@ build/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h | build
 build:
 	mkdir -p build
 
-# FreeBSD/OpenBSD: the musl build with the system compiler
+# FreeBSD/NetBSD/OpenBSD: the musl build with the system compiler, plain
+# -static (their compilers ignore -static-pie and would link libbearssl.so)
+# and no -fcf-protection (clang rejects it on OpenBSD/i386)
+NATIVE = MUSL_CC=cc STATIC=-static PIE= CF_PROT=
+
 native:
-	$(MAKE) musl MUSL_CC=cc
+	$(MAKE) musl $(NATIVE)
 
 check-native:
-	$(MAKE) check MUSL_CC=cc
+	$(MAKE) check $(NATIVE)
 
 # -------------------------------------------------------------------
 # Cosmopolitan APE build
