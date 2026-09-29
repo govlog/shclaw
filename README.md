@@ -224,13 +224,15 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 | System | CPU | Build | Tested |
 |--------|-----|-------|--------|
 | Linux | x86_64 | `make musl`, `make cosmo` | checks, live agents and plugins |
-| Linux | i686 (32-bit PC) | `make musl` | checks, live agents and plugins |
+| Linux | i386 (32-bit PC) | `make musl` | checks, live agents and plugins |
 | Linux | armv7l (Raspberry Pi) | `make musl` | checks, live agents and plugins |
 | FreeBSD 15.1 | x86_64 | `make cosmo`, `gmake native` | checks, live agents and plugins |
 | NetBSD (smolBSD) | x86_64 | `make cosmo` | live agents and plugins |
 | OpenBSD 7.9 | x86_64 | `gmake native` | checks, live agents and plugins |
 
 Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. `make musl` also supports aarch64, not tested yet.
+
+Release archives come from `make dist`. The Linux i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, without SSE, so the binary runs on any 32-bit PC from the Pentium Pro on.
 
 ---
 

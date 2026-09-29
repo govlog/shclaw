@@ -370,7 +370,10 @@ static void check_plugins(const char *tmp) {
     res = plugin_execute(&r, "fetch", NULL, 0, out, sizeof(out));
     CHECK(res && !strcmp(res, "GET /b?x=1 HTTP/1.1"), "plugin HTTP call: '%s'",
           res ? res : "(null)");
-    if (srv > 0) waitpid(srv, NULL, 0);
+    if (srv > 0) {   /* never served if the plugin did not load */
+        kill(srv, SIGTERM);
+        waitpid(srv, NULL, 0);
+    }
     res = plugin_execute(&r, "math", NULL, 0, out, sizeof(out));
     CHECK(res && !strcmp(res, "123456 7 12727533027 82 411522.333 411522333 "
                               "12345670000 1234570703701 7x"),

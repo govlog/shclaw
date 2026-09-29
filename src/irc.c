@@ -26,6 +26,7 @@ static int irc_sock_read(void *ctx, unsigned char *buf, size_t len) {
     return n > 0 ? (int)n : -1;
 }
 
+__attribute__((format(printf, 2, 3)))
 static void irc_sendf(irc_t *irc, const char *fmt, ...) {
     char buf[512];
     va_list ap;

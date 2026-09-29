@@ -53,6 +53,7 @@ void log_close(void) {
     pthread_mutex_unlock(&log_mutex);
 }
 
+__attribute__((format(printf, 2, 0)))
 static void log_write(const char *level, const char *fmt, va_list ap) {
     char timebuf[32];
     time_t t = time(NULL);

@@ -136,6 +136,7 @@ static int tc_plugin_strlen(const char *s) { return (int)strlen(s); }
 static void tc_plugin_free(void *p) { (void)p; }
 static int tc_plugin_atoi(const char *s) { return atoi(s); }
 
+__attribute__((format(printf, 3, 4)))
 static int tc_plugin_snprintf(char *buf, size_t sz, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
