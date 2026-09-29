@@ -146,3 +146,68 @@ int session_set_status(session_store_t *s, const char *sid, session_status_t sta
     pthread_mutex_unlock(&s->lock);
     return rc;
 }
+
+/* ── Owner conversation ─────────────────────────────────── */
+
+void chat_init(chat_log_t *c, int idle_s) {
+    memset(c, 0, sizeof(*c));
+    c->idle = idle_s;
+    pthread_mutex_init(&c->lock, NULL);
+}
+
+/* Caller holds the lock */
+static void chat_expire(chat_log_t *c) {
+    if (c->n && time(NULL) - c->last >= c->idle) {
+        c->n = c->next = 0;
+        c->id++;
+    }
+}
+
+void chat_add(chat_log_t *c, const char *agent, const char *who, const char *text) {
+    if (!c || !text || !text[0]) return;
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+
+    pthread_mutex_lock(&c->lock);
+    chat_expire(c);
+    c->last = t;
+    c->lines[c->next].seq = ++c->seq;
+    snprintf(c->lines[c->next].agent, sizeof(c->lines[0].agent), "%s", agent);
+    char *line = c->lines[c->next].text;
+    int max = TC_CHAT_LINE - 1;
+    int off = snprintf(line, TC_CHAT_LINE, "%02d:%02d %s: ", tm.tm_hour, tm.tm_min, who);
+    if (off < 0 || off > max) off = max;
+    int keep = utf8_prefix(text, max - off);
+    memcpy(line + off, text, (size_t)keep);
+    line[off + keep] = '\0';
+    for (char *p = line; *p; p++)   /* one line per entry */
+        if (*p == '\n' || *p == '\r') *p = ' ';
+    c->next = (c->next + 1) % TC_CHAT_LINES;
+    if (c->n < TC_CHAT_LINES) c->n++;
+    pthread_mutex_unlock(&c->lock);
+}
+
+unsigned chat_id(chat_log_t *c) {
+    if (!c) return 0;
+    pthread_mutex_lock(&c->lock);
+    chat_expire(c);
+    unsigned id = c->id;
+    pthread_mutex_unlock(&c->lock);
+    return id;
+}
+
+unsigned chat_render(chat_log_t *c, unsigned after, const char *skip, char *out, size_t sz) {
+    size_t off = 0;
+    out[0] = '\0';
+    if (!c) return 0;
+    pthread_mutex_lock(&c->lock);
+    for (int i = 0; i < c->n; i++) {
+        int k = (c->next - c->n + i + TC_CHAT_LINES) % TC_CHAT_LINES;
+        if (c->lines[k].seq > after && !(skip && !strcmp(c->lines[k].agent, skip)))
+            buf_appendf(out, sz, &off, "%s\n", c->lines[k].text);
+    }
+    unsigned seq = c->seq;
+    pthread_mutex_unlock(&c->lock);
+    return seq;
+}

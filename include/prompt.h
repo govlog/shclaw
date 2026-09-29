@@ -12,6 +12,10 @@
 
 #define PROMPT_IDENTITY           "You are %s.\n%s\n\n%s\n"
 
+/* After a builder in the list of other agents */
+#define PROMPT_BUILDER_PEER \
+    " (send it only requests for a new tool; run commands and answer questions yourself)"
+
 #define PROMPT_HUB_ROLE \
     "## Hub Role\n" \
     "You are the main agent. Analyse requests and delegate when needed.\n" \
@@ -24,6 +28,7 @@
 #define PROMPT_SCHEDULE_HEADER    "## Scheduled tasks\n%s\n"
 #define PROMPT_FACTS_HEADER       "## Facts\n%s\n"
 #define PROMPT_MEMORIES_HEADER    "## Recent memories\n%s\n"
+#define PROMPT_CHAT_HEADER        "## On the channel (oldest first)\n%s\n"
 
 #define PROMPT_RULES \
     "## Rules\n" \
@@ -178,6 +183,15 @@
     PROMPT_FACTS_HEADER \
     PROMPT_SCHEDULE_HEADER \
     PROMPT_MEMORIES_HEADER \
+    "%s"  /* channel lines of the open conversation (or empty) */ \
+    PROMPT_NOW \
+    "## Message\n%s"
+
+/* A turn in an open conversation: the history holds the rest */
+#define PROMPT_NEXT_TURN_FMT \
+    PROMPT_TRIGGER_HEADER \
+    "%s"  /* comm rules */ \
+    "%s"  /* what the others said since the last turn (or empty) */ \
     PROMPT_NOW \
     "## Message\n%s"
 

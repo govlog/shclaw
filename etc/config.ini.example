@@ -3,6 +3,8 @@
 [daemon]
 data_dir = ./data
 log_dir  = ./logs
+; Minutes of silence that close the conversation with the owner (0: none)
+;conversation_timeout = 15
 
 ; Remove this section to run without IRC (TUI and CLI only).
 ; Port 6697 uses TLS.
@@ -15,7 +17,8 @@ owner    = yournick
 
 ; --- LLM Providers ---
 ; Optional keys: max_tokens (output limit per call), timeout (seconds
-; without data before a call fails, default 600)
+; without data before a call fails, default 600), reasoning_effort (OpenAI
+; protocol; gpt-6-* models need "none" to accept function tools)
 
 [provider.anthropic]
 type     = anthropic

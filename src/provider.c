@@ -373,6 +373,9 @@ static int call_openai(provider_ref_t *prov, const char *system_prompt,
                                                  : (official ? 16000 : 4096));
     if (tools && cJSON_GetArraySize(tools) > 0)
         cJSON_AddItemToObject(payload, "tools", convert_tools_to_openai(tools));
+    /* gpt-6 takes function tools on this endpoint only with "none" */
+    if (prov->reasoning_effort[0])
+        cJSON_AddStringToObject(payload, "reasoning_effort", prov->reasoning_effort);
     /* Caching is automatic; the key keeps an agent's requests on the
      * servers that hold its prefix */
     if (official && prov->cache_key[0])

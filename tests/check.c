@@ -132,6 +132,120 @@ static pid_t llm_server(int n, const char *dir, int *port) {
     return pid;
 }
 
+/* An agent on the fake LLM server, its files in tmp/<name>-* */
+static void test_agent(agent_ctx_t *a, session_store_t *sessions, const char *name,
+                       const char *tmp, int port) {
+    char path[4200];
+    snprintf(a->name, sizeof(a->name), "%s", name);
+    snprintf(a->provider.provider_type, sizeof(a->provider.provider_type), "openai");
+    snprintf(a->provider.base_url, sizeof(a->provider.base_url), "http://127.0.0.1:%d", port);
+    snprintf(a->provider.model, sizeof(a->provider.model), "test");
+    snprintf(path, sizeof(path), "%s/%s-memory", tmp, name);
+    memory_init(&a->memory, path);
+    snprintf(path, sizeof(path), "%s/%s-schedule.json", tmp, name);
+    scheduler_init(&a->scheduler, path);
+    snprintf(path, sizeof(path), "%s/%s-sessions", tmp, name);
+    session_store_init(sessions, path);
+    a->sessions = sessions;
+}
+
+/* Messages of request i of the fake LLM server, system prompt first */
+static cJSON *request_messages(const char *tmp, int i, cJSON **req) {
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/req%d.json", tmp, i);
+    char *body = file_slurp(path, NULL);
+    *req = cJSON_Parse(body ? body : "");
+    free(body);
+    cJSON *msgs = cJSON_GetObjectItem(*req, "messages");
+    return msgs ? msgs : cJSON_CreateArray();   /* leaks on failure only */
+}
+
+static int same_prefix(cJSON *a, cJSON *b, int n) {
+    for (int i = 0; i < n; i++) {
+        char *x = cJSON_PrintUnformatted(cJSON_GetArrayItem(a, i));
+        char *y = cJSON_PrintUnformatted(cJSON_GetArrayItem(b, i));
+        int same = x && y && !strcmp(x, y);
+        free(x); free(y);
+        if (!same) return 0;
+    }
+    return 1;
+}
+
+/* Owner messages continue the agent's history until the conversation
+ * goes idle: the new turn is appended, so the provider cache keeps the
+ * prefix. What the other agents said in between comes with the turn. */
+static void check_conversation(const char *tmp) {
+    int port;
+    pid_t srv = llm_server(3, tmp, &port);
+    CHECK(srv > 0, "cannot start the fake LLM server");
+    if (srv <= 0) return;
+
+    static agent_ctx_t a;
+    static session_store_t sessions;
+    static chat_log_t chat;
+    test_agent(&a, &sessions, "talker", tmp, port);
+    chat_init(&chat, 1);               /* 1 s of silence closes it */
+    a.chat = &chat;
+
+    agent_run_session(&a, TRIG_IRC, "weather in Paris?", "c1");
+    chat_add(&chat, "builder", "builder", "plugin meteo created");
+    agent_run_session(&a, TRIG_IRC, "and in Grenoble?", "c2");
+    sleep(2);
+    agent_run_session(&a, TRIG_IRC, "hello again", "c3");
+    waitpid(srv, NULL, 0);
+
+    cJSON *r0, *r1, *r2;
+    cJSON *m0 = request_messages(tmp, 0, &r0), *m1 = request_messages(tmp, 1, &r1),
+          *m2 = request_messages(tmp, 2, &r2);
+    int n0 = cJSON_GetArraySize(m0), n1 = cJSON_GetArraySize(m1);
+    const char *last = j_str(cJSON_GetArrayItem(m1, n1 - 1), "content");
+    CHECK(n0 == 2 && n1 == n0 + 2 && same_prefix(m0, m1, n0) &&
+          last && strstr(last, "and in Grenoble?"),
+          "second message does not continue the first: %d then %d messages", n0, n1);
+    CHECK(last && strstr(last, "plugin meteo created"),
+          "what another agent said is missing from the next turn:\n%s", last ? last : "");
+    char *fresh = cJSON_PrintUnformatted(m2);
+    CHECK(cJSON_GetArraySize(m2) == n0 && fresh && !strstr(fresh, "weather in Paris?"),
+          "an idle conversation was continued");
+    free(fresh);
+    cJSON_Delete(r0); cJSON_Delete(r1); cJSON_Delete(r2);
+}
+
+/* Past the size limit (history_budget), the oldest exchanges go, but
+ * never the first turn: it holds the context */
+static void check_conversation_limit(const char *tmp) {
+    int port;
+    pid_t srv = llm_server(4, tmp, &port);
+    CHECK(srv > 0, "cannot start the fake LLM server");
+    if (srv <= 0) return;
+
+    static agent_ctx_t a;
+    static session_store_t sessions;
+    static chat_log_t chat;
+    test_agent(&a, &sessions, "long", tmp, port);
+    chat_init(&chat, 60);
+    a.chat = &chat;
+    a.history_budget = 12000;
+
+    /* Each fits with the first exchange, not both together */
+    static char xs[6001], ys[6001];
+    memset(xs, 'x', sizeof(xs) - 1);
+    memset(ys, 'y', sizeof(ys) - 1);
+    agent_run_session(&a, TRIG_IRC, "first question", "l1");
+    agent_run_session(&a, TRIG_IRC, xs, "l2");
+    agent_run_session(&a, TRIG_IRC, ys, "l3");
+    agent_run_session(&a, TRIG_IRC, "fourth question", "l4");
+    waitpid(srv, NULL, 0);
+
+    cJSON *r3;
+    char *json = cJSON_PrintUnformatted(request_messages(tmp, 3, &r3));
+    CHECK(json && strstr(json, "first question") && !strstr(json, "xxxxxxxxxx") &&
+          strstr(json, "yyyyyyyyyy") && strstr(json, "fourth question"),
+          "oldest exchange not dropped past the limit");
+    free(json);
+    cJSON_Delete(r3);
+}
+
 /* Tools + system prompt open every request: they must stay byte-identical
  * from one session to the next, or no provider can reuse its cache. */
 static void check_prompt_cache(const char *tmp) {
@@ -143,17 +257,7 @@ static void check_prompt_cache(const char *tmp) {
     static agent_ctx_t a;              /* large: not on the stack */
     static session_store_t sessions;
     char path[4200], out[256];
-    snprintf(a.name, sizeof(a.name), "tester");
-    snprintf(a.provider.provider_type, sizeof(a.provider.provider_type), "openai");
-    snprintf(a.provider.base_url, sizeof(a.provider.base_url), "http://127.0.0.1:%d", port);
-    snprintf(a.provider.model, sizeof(a.provider.model), "test");
-    snprintf(path, sizeof(path), "%s/tester-memory", tmp);
-    memory_init(&a.memory, path);
-    snprintf(path, sizeof(path), "%s/tester-schedule.json", tmp);
-    scheduler_init(&a.scheduler, path);
-    snprintf(path, sizeof(path), "%s/tester-sessions", tmp);
-    session_store_init(&sessions, path);
-    a.sessions = &sessions;
+    test_agent(&a, &sessions, "tester", tmp, port);
 
     agent_run_session(&a, TRIG_IRC, "hello", "t1");
     memory_add(&a.memory, "Owner likes tea", "person", 5, NULL, out, sizeof(out));
@@ -183,6 +287,36 @@ static void check_prompt_cache(const char *tmp) {
     for (int i = 0; i < 2; i++) { free(prefix[i]); free(turn[i]); }
 }
 
+/* gpt-6 models take function tools on chat/completions only with
+ * reasoning_effort "none": the provider key must reach the request */
+static void check_reasoning_effort(const char *tmp) {
+    int port;
+    pid_t srv = llm_server(1, tmp, &port);
+    CHECK(srv > 0, "cannot start the fake LLM server");
+    if (srv <= 0) return;
+
+    provider_ref_t prov = {0};
+    snprintf(prov.provider_type, sizeof(prov.provider_type), "openai");
+    snprintf(prov.base_url, sizeof(prov.base_url), "http://127.0.0.1:%d", port);
+    snprintf(prov.model, sizeof(prov.model), "test");
+    snprintf(prov.reasoning_effort, sizeof(prov.reasoning_effort), "none");
+    cJSON *msgs = cJSON_Parse("[{\"role\":\"user\",\"content\":\"hi\"}]");
+    llm_response_t resp = {0};
+    llm_call(&prov, "system", msgs, NULL, &resp);
+    llm_response_free(&resp);
+    cJSON_Delete(msgs);
+    waitpid(srv, NULL, 0);
+
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/req0.json", tmp);
+    char *body = file_slurp(path, NULL);
+    cJSON *req = cJSON_Parse(body ? body : "");
+    const char *effort = j_str(req, "reasoning_effort");
+    CHECK(effort && !strcmp(effort, "none"), "reasoning_effort not sent:\n%s", body ? body : "");
+    cJSON_Delete(req);
+    free(body);
+}
+
 static const char AGENTS[3][32] = { "jarvis", "Oracle", "builder" };
 
 static int mentions(const char *msg, mention_t *out) {
@@ -209,6 +343,20 @@ static void check_mentions(void) {
     n = mentions("hi @oracle X @jarvis Y", m);
     CHECK(n == 3 && !strcmp(m[0].agent, "jarvis") && !strcmp(m[0].text, "hi") &&
           !strcmp(m[1].text, "X") && !strcmp(m[2].text, "Y"), "fan-out: %d", n);
+
+    /* IRC habit: "nick: text" or "nick, text" at the start of the line */
+    n = mentions("builder: make a weather tool", m);
+    CHECK(n == 1 && !strcmp(m[0].agent, "builder") && !strcmp(m[0].text, "make a weather tool"),
+          "'builder:' prefix: %d '%s' '%s'", n, n ? m[0].agent : "", n ? m[0].text : "");
+
+    n = mentions("oracle, check X @builder then Y", m);
+    CHECK(n == 2 && !strcmp(m[0].agent, "Oracle") && !strcmp(m[0].text, "check X") &&
+          !strcmp(m[1].agent, "builder") && !strcmp(m[1].text, "then Y"),
+          "'oracle,' prefix then a mention: %d", n);
+
+    n = mentions("note: builder, buy milk", m);
+    CHECK(n == 1 && !strcmp(m[0].agent, "jarvis") && !strcmp(m[0].text, "note: builder, buy milk"),
+          "unknown prefix or name mid-line routed away: '%s'", n ? m[0].agent : "");
 }
 
 static void check_time(void) {
@@ -528,6 +676,9 @@ int main(void) {
     check_plugins(tmp);
     check_irc();
     check_prompt_cache(tmp);
+    check_conversation(tmp);
+    check_conversation_limit(tmp);
+    check_reasoning_effort(tmp);
 
     char cmd[4200];
     snprintf(cmd, sizeof(cmd), "/bin/rm -rf %s", tmp);

@@ -39,7 +39,25 @@ int parse_mentions(const char *msg,
     /* Mentions of known agents or @all; "user@oracle.com" is not one */
     struct { const char *at, *end; char name[32]; } m[16];
     int n = 0;
-    for (const char *p = msg; *p && n < 16; p++) {
+    const char *p = msg;
+
+    /* IRC habit: "builder: do X" or "builder, do X" is a mention */
+    const char *word = msg;
+    while (*word && !strchr(" \t@,:.!?;", *word)) word++;
+    if (word > msg && (*word == ':' || *word == ',')) {
+        size_t len = (size_t)(word - msg);
+        int idx = find_agent(msg, len, agents, n_agents);
+        int all = len == 3 && strncasecmp(msg, "all", 3) == 0;
+        if (idx >= 0 || all) {
+            m[0].at = msg;
+            m[0].end = word;
+            snprintf(m[0].name, sizeof(m[0].name), "%s", all ? "all" : agents[idx]);
+            n = 1;
+            p = word;
+        }
+    }
+
+    for (; *p && n < 16; p++) {
         if (*p != '@' || (p > msg && is_word_char(p[-1]))) continue;
         const char *s = p + 1, *e = s;
         while (*e && !strchr(" \t@,:.!?;", *e)) e++;

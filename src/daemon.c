@@ -34,6 +34,8 @@ static void load_providers(daemon_t *d, ini_t *cfg) {
         snprintf(p->base_url, sizeof(p->base_url), "%s", base ? base : "");
         p->max_tokens = ini_get_int(cfg, section, "max_tokens", 0);
         p->timeout = ini_get_int(cfg, section, "timeout", 0);
+        const char *effort = ini_get(cfg, section, "reasoning_effort");
+        snprintf(p->reasoning_effort, sizeof(p->reasoning_effort), "%s", effort ? effort : "");
     }
     log_info("Providers: %d loaded", d->n_providers);
 }
@@ -182,6 +184,7 @@ static void load_agent(daemon_t *d, const char *ini_path) {
     a->sessions = &d->sessions;
     a->plugins = &d->plugins;
     a->irc = &d->irc;
+    a->chat = d->chat.idle > 0 ? &d->chat : NULL;
     a->data_dir = d->data_dir;
     a->peers = d->agents;
     a->last_session_time = -TC_SESSION_GAP;   /* idle right away, even at boot */
@@ -541,6 +544,9 @@ int daemon_run(daemon_t *d, ini_t *cfg) {
     char sub[4200];
     snprintf(sub, sizeof(sub), "%s/sessions", d->data_dir);
     session_store_init(&d->sessions, sub);
+    /* Minutes of silence that close the owner conversation; 0: none */
+    int idle = ini_get_int(cfg, "daemon", "conversation_timeout", 15);
+    chat_init(&d->chat, idle * 60);
     snprintf(sub, sizeof(sub), "%s/messages", d->data_dir);
     messenger_init(&d->messenger, sub);
     messenger_register(&d->messenger, "owner");

@@ -125,7 +125,9 @@ Optional keys:
 |---------|-----|---------|---------|
 | `[provider.*]` | `max_tokens` | 16000 (official APIs), 4096 (others) | Output limit per model call |
 | `[provider.*]` | `timeout` | 600 | Seconds without data before a model call fails |
-| `[agent]` | `history_budget` | 0 (off) | Characters of tool output kept in a session. Past it, the oldest outputs are shortened to half the budget. For small context windows; OpenAI-compatible providers only |
+| `[provider.*]` | `reasoning_effort` | not sent | Sent as is to OpenAI-compatible APIs. `gpt-6-*` models need `none`: without it, they refuse function tools |
+| `[daemon]` | `conversation_timeout` | 15 | Minutes of silence that close the conversation with the owner. 0: each owner message starts afresh |
+| `[agent]` | `history_budget` | 0 (off) | Characters of tool output kept in a session. Past it, the oldest outputs are shortened to half the budget. It also caps the conversation kept between two owner messages (default 64K characters): past it, the oldest exchanges go, the first one stays. For small context windows; the shortening is for OpenAI-compatible providers only |
 
 **With Ollama**, set on the server:
 
@@ -151,7 +153,7 @@ shclaw looks for `etc/config.ini` in the current directory; `--workdir=/path/to/
 
 ## How it works
 
-- **Sessions.** One event loop watches IRC and a Unix socket (CLI and TUI). Each trigger starts a session in its own thread: an owner message, a due task, a message from another agent. An agent runs one session at a time, with its personality, its memory and its tools.
+- **Sessions.** One event loop watches IRC and a Unix socket (CLI and TUI). Each trigger starts a session in its own thread: an owner message, a due task, a message from another agent. An agent runs one session at a time, with its personality, its memory and its tools. Talking to the owner opens a conversation: while it goes on, each session that answers the owner continues the agent's own history, tool results included, and learns what the other agents said since. After `conversation_timeout` minutes of silence the next message starts afresh.
 - **Agents.** Each agent is an INI file in `etc/agents/`. Two flags give a role:
   - `hub = true`: gets the IRC messages without an `@mention`, chats and delegates to specialists. A small model is enough (`qwen3.5:9b`, `gpt-4.1-nano`).
   - `builder = true`: writes C plugins with `create_plugin`. It sees only 4 tools and gets the plugin template, with every available function, in its prompt. Compile errors come back with the faulty source lines, and a test run shows the output and each HTTP call. Code that the model prints as text is compiled too. With this loop, even `gpt-4.1-nano` writes a working weather plugin.
@@ -197,6 +199,7 @@ One connection, one nick, one channel, shared by all agents.
 ```
 you>    hey, check the server load              => routed to hub
 you>    @oracle analyze this log file           => routed to oracle
+you>    oracle: analyze this log file           => same ("oracle," too)
 you>    @oracle X @jarvis Y                     => both get their part
 you>    @all status                             => broadcast
 

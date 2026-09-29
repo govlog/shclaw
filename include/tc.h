@@ -179,6 +179,7 @@ typedef struct {
     int  max_tokens;
     int  timeout;              /* seconds */
     char cache_key[48];        /* OpenAI prompt_cache_key: one per agent */
+    char reasoning_effort[16]; /* OpenAI protocol; empty = not sent */
 } provider_ref_t;
 
 typedef struct {
@@ -283,6 +284,35 @@ int   session_add_message(session_store_t *s, const char *sid,
                           const char *sender, const char *recipient,
                           const char *content, msg_type_t msg_type);
 int   session_set_status(session_store_t *s, const char *sid, session_status_t status);
+
+/* The owner conversation (IRC/TUI), shared by all agents: open while
+ * lines keep coming, closed after `idle` seconds of silence. Each agent
+ * keeps its own history of it (agent_ctx_t.conv); these lines tell it what
+ * the others said. */
+#define TC_CONV_MAX   65536        /* chars of history kept, unless history_budget */
+#define TC_CHAT_LINES 20
+#define TC_CHAT_LINE  320
+typedef struct {
+    struct {
+        unsigned seq;
+        char     agent[32];            /* the agent who spoke or was spoken to */
+        char     text[TC_CHAT_LINE];   /* "HH:MM who: text" */
+    } lines[TC_CHAT_LINES];
+    int      n, next;                  /* next = oldest once full */
+    unsigned seq;                      /* of the last line */
+    unsigned id;                       /* changes when a conversation closes */
+    int      idle;                     /* seconds */
+    time_t   last;
+    pthread_mutex_t lock;
+} chat_log_t;
+
+void     chat_init(chat_log_t *c, int idle_s);
+void     chat_add(chat_log_t *c, const char *agent, const char *who, const char *text);
+/* Id of the open conversation (0 for NULL) */
+unsigned chat_id(chat_log_t *c);
+/* Lines after `after` that do not concern `skip` (NULL: all), oldest
+ * first, one per line; returns the seq of the last line */
+unsigned chat_render(chat_log_t *c, unsigned after, const char *skip, char *out, size_t sz);
 
 /* ── Memory ─────────────────────────────────────────────── */
 
@@ -508,11 +538,16 @@ struct agent_ctx {
     session_store_t *sessions;
     plugin_registry_t *plugins;
     irc_t       *irc;
+    chat_log_t  *chat;            /* NULL: every owner message starts afresh */
     char        *data_dir;
     char         objectives[16][256];
     int          n_objectives;
     agent_ctx_t *peers;           /* every agent, this one included */
     int          n_peers;
+
+    /* Its side of the open conversation (its own session thread only) */
+    cJSON       *conv;
+    unsigned     conv_id, conv_seq;
 
     /* Runtime, shared with the main loop (atomic access) */
     int          busy;
@@ -546,6 +581,7 @@ typedef struct {
 
     /* Runtime */
     session_store_t  sessions;
+    chat_log_t       chat;
     messenger_t      messenger;
     plugin_registry_t plugins;
     irc_t            irc;

@@ -177,8 +177,9 @@ static void build_system_prompt(agent_ctx_t *agent, char *out, size_t out_sz) {
     for (int i = 0; i < agent->n_peers; i++) {
         agent_ctx_t *p = &agent->peers[i];
         if (p == agent) continue;
-        buf_appendf(agents_text, sizeof(agents_text), &off, "- %s%s%s\n", p->name,
-                    p->specialty[0] ? " — " : "", p->specialty);
+        buf_appendf(agents_text, sizeof(agents_text), &off, "- %s%s%s%s\n", p->name,
+                    p->specialty[0] ? " — " : "", p->specialty,
+                    p->is_builder ? PROMPT_BUILDER_PEER : "");
     }
 
     char objectives[TC_BUF_LG] = "";
@@ -203,24 +204,35 @@ static void build_system_prompt(agent_ctx_t *agent, char *out, size_t out_sz) {
     );
 }
 
-/* The first user turn: what changes between sessions, then the trigger.
- * Returns a malloc'd string, NULL when out of memory. */
-static char *build_first_turn(agent_ctx_t *agent, trigger_type_t trig_type,
-                              const trigger_info_t *trig, const char *trig_data) {
-    char now[96], utc_str[32], loc_str[32];
+static void format_now(char *now, size_t sz) {
+    char utc_str[32], loc_str[32];
     time_t t = time(NULL);
     format_time(t, 0, utc_str, sizeof(utc_str));
     format_time(t, 1, loc_str, sizeof(loc_str));
     /* Local time first: tools take local times */
     if (strncmp(utc_str, loc_str, strlen(loc_str)) == 0)
-        snprintf(now, sizeof(now), "%s", utc_str);
+        snprintf(now, sz, "%s", utc_str);
     else
-        snprintf(now, sizeof(now), "%s local time (UTC: %s)", loc_str, utc_str);
+        snprintf(now, sz, "%s local time (UTC: %s)", loc_str, utc_str);
+}
 
+static const char *comm_rules(trigger_type_t trig_type, const trigger_info_t *trig) {
+    return trig_type != TRIG_AGENT_MSG ? PROMPT_COMM_DIRECT :
+           trig->reply_batch ? PROMPT_COMM_AGENT_REPLY : PROMPT_COMM_AGENT_MSG;
+}
+
+/* The first user turn: what changes between sessions, then the trigger.
+ * `channel` is the section of lines from the conversation, or "".
+ * Returns a malloc'd string, NULL when out of memory. */
+static char *build_first_turn(agent_ctx_t *agent, trigger_type_t trig_type,
+                              const trigger_info_t *trig, const char *trig_data,
+                              const char *channel) {
+    char now[96];
+    format_now(now, sizeof(now));
     char *message = render_trigger(trig_type, trig_data);
     char *memories = malloc(TC_BUF_XL);
     /* memories + schedule + facts + the fixed text all fit in this */
-    size_t cap = (message ? strlen(message) : 0) + TC_BUF_XL + 3 * TC_BUF_LG;
+    size_t cap = (message ? strlen(message) : 0) + strlen(channel) + TC_BUF_XL + 3 * TC_BUF_LG;
     char *out = message && memories ? malloc(cap) : NULL;
     if (out) {
         char schedule[TC_BUF_LG], facts[TC_BUF_LG];
@@ -229,12 +241,12 @@ static char *build_first_turn(agent_ctx_t *agent, trigger_type_t trig_type,
         facts_get(&agent->memory, "", facts, sizeof(facts));
         snprintf(out, cap, PROMPT_FIRST_TURN_FMT,
             trigger_type_str(trig_type),
-            trig_type != TRIG_AGENT_MSG ? PROMPT_COMM_DIRECT :
-            trig->reply_batch ? PROMPT_COMM_AGENT_REPLY : PROMPT_COMM_AGENT_MSG,
+            comm_rules(trig_type, trig),
             trig->relay ? PROMPT_IRC_FORMAT : "",
             facts[0] ? facts : PROMPT_NONE,
             schedule[0] ? schedule : PROMPT_NONE,
             memories[0] ? memories : PROMPT_NONE,
+            channel,
             now,
             message
         );
@@ -242,6 +254,47 @@ static char *build_first_turn(agent_ctx_t *agent, trigger_type_t trig_type,
     free(memories);
     free(message);
     return out;
+}
+
+/* A turn in an open conversation: the history already holds the context */
+static char *build_next_turn(trigger_type_t trig_type, const trigger_info_t *trig,
+                             const char *trig_data, const char *channel) {
+    char now[96];
+    format_now(now, sizeof(now));
+    char *message = render_trigger(trig_type, trig_data);
+    size_t cap = (message ? strlen(message) : 0) + strlen(channel) + TC_BUF_LG;
+    char *out = message ? malloc(cap) : NULL;
+    if (out)
+        snprintf(out, cap, PROMPT_NEXT_TURN_FMT, trigger_type_str(trig_type),
+                 comm_rules(trig_type, trig), channel, now, message);
+    free(message);
+    return out;
+}
+
+/* Keeps a conversation under max chars by dropping its oldest exchanges
+ * (from a user text turn to the next one), never the first: it holds the
+ * context. Returns 0 when only the first and the last exchanges are left
+ * and they still do not fit. */
+static int conv_fit(cJSON *messages, size_t max) {
+    for (;;) {
+        char *json = cJSON_PrintUnformatted(messages);
+        size_t len = json ? strlen(json) : SIZE_MAX;
+        free(json);
+        if (len <= max) return 1;
+
+        int n = cJSON_GetArraySize(messages), from = -1, to = -1;
+        for (int i = 1; i < n && to < 0; i++) {
+            cJSON *m = cJSON_GetArrayItem(messages, i);
+            const char *role = j_str(m, "role");
+            if (!role || strcmp(role, "user") != 0 ||
+                !cJSON_IsString(cJSON_GetObjectItem(m, "content")))
+                continue;   /* tool results are user turns too, as arrays */
+            if (from < 0) from = i; else to = i;
+        }
+        if (to < 0) return 0;
+        for (int i = from; i < to; i++)
+            cJSON_DeleteItemFromArray(messages, from);
+    }
 }
 
 /* ── Tool calls ─────────────────────────────────────────── */
@@ -508,13 +561,37 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
     trigger_info_t trig;
     parse_trigger(trig_type, trig_data, &trig);
 
+    /* Sessions that talk to the owner form the conversation: while it is
+     * open, the agent's history goes on, with what the others said since */
+    int talk = trig.relay && agent->chat;
+    unsigned conv_id = talk ? chat_id(agent->chat) : 0, seq = 0;
+    int resume = talk && agent->conv && agent->conv_id == conv_id;
+    if (talk && !resume) {
+        cJSON_Delete(agent->conv);
+        agent->conv = NULL;
+    }
+    size_t chat_sz = TC_CHAT_LINES * TC_CHAT_LINE + 64;
+    char *lines = malloc(chat_sz), *channel = malloc(chat_sz);
+    if (lines && channel) {
+        lines[0] = channel[0] = '\0';
+        if (talk)
+            seq = chat_render(agent->chat, resume ? agent->conv_seq : 0,
+                              resume ? agent->name : NULL, lines, chat_sz);
+        if (lines[0])
+            snprintf(channel, chat_sz, PROMPT_CHAT_HEADER, lines);
+    }
+
     char *system_prompt = malloc(TC_BUF_HUGE);
     char *result_buf = malloc(TC_BUF_XL);
-    char *first_turn = build_first_turn(agent, trig_type, &trig, trig_data);
+    char *opening = !lines || !channel ? NULL
+        : resume ? build_next_turn(trig_type, &trig, trig_data, channel)
+                 : build_first_turn(agent, trig_type, &trig, trig_data, channel);
     session_state_t *st = calloc(1, sizeof(*st));
-    if (!system_prompt || !result_buf || !first_turn || !st) {
+    free(lines);
+    free(channel);
+    if (!system_prompt || !result_buf || !opening || !st) {
         log_error("[%s] out of memory", agent->name);
-        free(system_prompt); free(result_buf); free(first_turn); free(st);
+        free(system_prompt); free(result_buf); free(opening); free(st);
         return SESSION_FAILED;
     }
     build_system_prompt(agent, system_prompt, TC_BUF_HUGE);
@@ -528,9 +605,16 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
         cJSON_Delete(plugin_tools);
     }
 
-    cJSON *messages = cJSON_CreateArray();
-    add_user_text(messages, first_turn);
-    free(first_turn);
+    cJSON *messages = resume ? agent->conv : cJSON_CreateArray();
+    if (resume)
+        agent->conv = NULL;   /* back at the end, if the session goes well */
+    add_user_text(messages, opening);
+    free(opening);
+    if (talk && trig_type == TRIG_IRC) {   /* after the turn: it already holds the message */
+        char who[48];
+        snprintf(who, sizeof(who), "owner → %s", agent->name);
+        chat_add(agent->chat, agent->name, who, trig_data);
+    }
 
     int max_turns = agent->max_turns > 0 ? agent->max_turns : TC_MAX_TURNS;
     int trim = agent->history_budget > 0 &&
@@ -566,8 +650,10 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
                                 b->text, thinking ? MSG_THINKING : MSG_TEXT);
             if (thinking) continue;
             text_len += strlen(b->text) + 1;
-            if (trig.relay)
+            if (trig.relay) {
                 irc_reply(agent->irc, agent->name, b->text);
+                if (talk) chat_add(agent->chat, agent->name, agent->name, b->text);
+            }
         }
         char *text = calloc(1, text_len + 1);
         for (int i = 0; text && i < resp.n_text; i++)
@@ -670,6 +756,17 @@ int agent_run_session(agent_ctx_t *agent, trigger_type_t trig_type,
 
     if (trig.n_requesters)
         deliver_answer(agent, &trig, st, thread_id, answer, outcome != SESSION_COMPLETED);
+
+    /* Keep the conversation: complete exchanges only, within the limit */
+    const char *last = j_str(cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1), "role");
+    if (talk && outcome == SESSION_COMPLETED && last && !strcmp(last, "assistant") &&
+        conv_fit(messages, agent->history_budget > 0 ? (size_t)agent->history_budget
+                                                     : TC_CONV_MAX)) {
+        agent->conv = messages;
+        agent->conv_id = conv_id;
+        agent->conv_seq = seq;
+        messages = NULL;
+    }
 
     free(answer);
     cJSON_Delete(messages);
