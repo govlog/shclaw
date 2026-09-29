@@ -17,6 +17,11 @@ LIVE_DIR=$HOME/dev/shclaw-release/live
 PI_HOST=pi@raspberrypi.local
 PI_DIR=shclaw-pipeline              # work dir, relative to the Pi home
 PI_A64_ROOT=shclaw-test/a64/root    # Alpine aarch64 chroot, relative to home
+PI_A32_ROOT=shclaw-test/a32/root    # Alpine armhf chroot (ARMv6), relative to home
+
+# riscv64 builds in Docker under qemu: register qemu-riscv64 (static, from the
+# qemu-user package) in binfmt_misc with the F flag, e.g. with
+# /usr/lib/binfmt.d/qemu-riscv64.conf from qemu-user-binfmt, or by hand.
 
 # BSD VMs: disks in $VM_DIR/vm, root SSH key $VM_DIR/vmkey. Each guest needs
 # cc and gmake: OpenBSD `pkg_add gmake`, FreeBSD `pkg install gmake`, NetBSD

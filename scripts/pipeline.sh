@@ -17,7 +17,7 @@ set -u
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 
-TARGETS="linux-x86_64 cosmo-x86_64 linux-i386 linux-armv7l linux-aarch64
+TARGETS="linux-x86_64 cosmo-x86_64 linux-i386 linux-armv6 linux-armv7l linux-aarch64 linux-riscv64
 openbsd-amd64 openbsd-i386 freebsd-amd64 freebsd-i386 netbsd-amd64 netbsd-i386
 cosmo-on-freebsd freebsd-i386-on-amd64 cosmo-on-netbsd"
 # The last three ship nothing: they run binaries built by other targets
@@ -159,6 +159,36 @@ t_linux_armv7l() {
         pi_sh "cd $d && linux32 make musl && linux32 make check && make dist ARCH=armv7l" &&
         pi_sh "cat $d/dist/$a" > "$WORK/$a" && collect "$WORK/$a" &&
         live pi_sh "$d/dist/$a" "$PI_DIR/live-armv7l"
+}
+
+t_linux_armv6() {   # Pi Zero/1: in the Alpine armhf chroot, built for ARMv6
+    local r=$PI_A32_ROOT a
+    a=$(archive linux-armv6)
+    # TinyCC must generate ARMv6 EABI hard-float code, not the board's ARMv7
+    pi_sh "sudo rm -rf $r/pipeline && sudo mkdir $r/pipeline && sudo tar -xf - -C $r/pipeline" < "$BUNDLE" &&
+        pi_sh "mountpoint -q $r/proc || sudo mount -t proc proc $r/proc
+            mountpoint -q $r/dev || sudo mount --bind /dev $r/dev
+            sudo linux32 chroot $r /bin/sh -c 'command -v gcc >/dev/null || apk add --no-cache build-base >/dev/null
+                V=\"MUSL_CC=gcc DIST_ARCH=armv6\"; T=\"TCC_CONF=--cpu=armv6l --triplet=arm-linux-gnueabihf\"
+                cd /pipeline && make musl \$V \"\$T\" && make check \$V \"\$T\" && make dist \$V \"\$T\"'
+            rc=\$?; sudo umount $r/dev $r/proc; exit \$rc" &&
+        pi_sh "cat $r/pipeline/dist/$a" > "$WORK/$a" && collect "$WORK/$a" &&
+        live pi_sh "$r/pipeline/dist/$a" "$PI_DIR/live-armv6"
+}
+
+t_linux_riscv64() {   # Docker under qemu-riscv64 (binfmt_misc, see pipeline.conf)
+    local d=$WORK/linux-riscv64 a
+    a=$(archive linux-riscv64)
+    [ -e /proc/sys/fs/binfmt_misc/qemu-riscv64 ] ||
+        { echo "SKIP: no qemu-riscv64 in binfmt_misc (see pipeline.conf.example)"; return 3; }
+    rm -rf "$d" && mkdir -p "$d/out" &&
+        docker run --rm --platform linux/riscv64 -v "$BUNDLE:/src.tar:ro" -v "$d/out:/out" alpine:3.24 sh -ec "
+            apk add --no-cache build-base >/dev/null
+            mkdir /build && tar -xf /src.tar -C /build && cd /build
+            make musl MUSL_CC=gcc && make check MUSL_CC=gcc && make dist MUSL_CC=gcc
+            cp dist/$a /out/ && chown -R $(id -u):$(id -g) /out" &&
+        collect "$d/out/$a" &&
+        live local_sh "$OUTV/$a" "$d/live"
 }
 
 t_linux_aarch64() {   # in the Alpine aarch64 chroot (sudo on the board)

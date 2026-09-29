@@ -26,6 +26,9 @@ REALIGN := $(if $(filter i686 i386,$(ARCH)),-mstackrealign,)
 # NetBSD (PaX MPROTECT) never lets written pages become executable: TinyCC
 # maps its code from a temporary file twice instead, RX and RW
 TCC_DEFS := $(if $(filter NetBSD,$(shell uname -s)),-DCONFIG_SELINUX,)
+# Extra TinyCC configure options, e.g. TCC_CONF=--cpu=armv6l for ARMv6
+# plugin code when building on a newer ARM CPU
+TCC_CONF ?=
 
 ifeq ($(filter x86_64 aarch64 i686 i386,$(ARCH)),)
   STATIC := -static
@@ -152,7 +155,7 @@ vendor/bearssl/build/libbearssl.a.musl: vendor/bearssl/Makefile
 vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
 	@rm -f vendor/tcc/libtcc.a.cosmo
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
-	cd vendor/tcc && ./configure --cc=$(MUSL_CC)
+	cd vendor/tcc && ./configure --cc=$(MUSL_CC) $(TCC_CONF)
 	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) \
 		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 $(TCC_DEFS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
@@ -259,13 +262,16 @@ check-cosmo: $(CHECK_COSMO) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/l
 # -------------------------------------------------------------------
 VERSION   := $(shell sed -n 's/.*TC_VERSION *"\(.*\)"/\1/p' include/tc.h)
 OS        := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+# Name of the CPU in the archive name; set it instead of ARCH, which the
+# vendor Makefiles also read (e.g. DIST_ARCH=armv6 on a newer ARM CPU)
+DIST_ARCH ?= $(ARCH)
 DIST_KIT  := README.md LICENSE NOTICE etc/config.ini.example \
              $(wildcard etc/agents/*.ini.example) include/tc_plugin.h plugins/_template.c
 
 dist:
 	@test -f $(MUSL_BIN) -o -f $(COSMO_BIN) || { echo "Build first: make musl or make cosmo"; exit 1; }
 	@mkdir -p dist
-	@for pair in "$(MUSL_BIN) $(OS)-$(ARCH)" "$(COSMO_BIN) cosmo-x86_64"; do \
+	@for pair in "$(MUSL_BIN) $(OS)-$(DIST_ARCH)" "$(COSMO_BIN) cosmo-x86_64"; do \
 		set -- $$pair; [ -f "$$1" ] || continue; \
 		name=shclaw-$(VERSION)-$$2; rm -rf "dist/$$name"; mkdir -p "dist/$$name"; \
 		tar -cf - $(DIST_KIT) | tar -xf - -C "dist/$$name"; \

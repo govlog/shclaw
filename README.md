@@ -235,8 +235,10 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 |--------|-----|-------|--------|
 | Linux | x86_64 | `make musl`, `make cosmo` | checks, live agents and plugins |
 | Linux | i386 (32-bit PC) | `make musl` | checks, live agents and plugins |
+| Linux | armv6 (Pi Zero, Pi 1) | `make musl DIST_ARCH=armv6 TCC_CONF=...`, see `scripts/pipeline.sh` | checks, live agents and plugins, also on an emulated ARM1176 |
 | Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl` | checks, live agents and plugins |
 | Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl` | checks, live agents and plugins |
+| Linux | riscv64 | `make musl` | checks, live agents and plugins, under qemu |
 | FreeBSD 15.1 | x86_64 | `make cosmo`, `gmake native` | checks, live agents and plugins |
 | FreeBSD 14.5 | i386 | `gmake native` | checks, live agents and plugins |
 | NetBSD 10.2, 11.99 (smolBSD) | x86_64 | `make cosmo`, `gmake native` (10.2) | checks, live agents and plugins |
