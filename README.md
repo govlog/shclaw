@@ -50,7 +50,7 @@ git clone https://github.com/govlog/shclaw.git && cd shclaw
 
 make musl    # static Linux binary, ~540K
 make cosmo   # one binary for Linux, FreeBSD, NetBSD (x86_64), ~970K
-gmake native # FreeBSD or OpenBSD, with the system compiler
+gmake native # FreeBSD, NetBSD or OpenBSD, with the system compiler
 ```
 
 The first build fetches the vendored libraries at pinned revisions. Prebuilt archives for each platform are on the [Releases](https://github.com/govlog/shclaw/releases) page.
@@ -225,12 +225,15 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 |--------|-----|-------|--------|
 | Linux | x86_64 | `make musl`, `make cosmo` | checks, live agents and plugins |
 | Linux | i386 (32-bit PC) | `make musl` | checks, live agents and plugins |
-| Linux | armv7l (Raspberry Pi) | `make musl` | checks, live agents and plugins |
+| Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl` | checks, live agents and plugins |
+| Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl` | checks, live agents and plugins |
 | FreeBSD 15.1 | x86_64 | `make cosmo`, `gmake native` | checks, live agents and plugins |
-| NetBSD (smolBSD) | x86_64 | `make cosmo` | live agents and plugins |
-| OpenBSD 7.9 | x86_64 | `gmake native` | checks, live agents and plugins |
+| FreeBSD 14.5 | i386 | `gmake native` | checks, live agents and plugins |
+| NetBSD 10.2, 11.99 (smolBSD) | x86_64 | `make cosmo` | checks, live agents and plugins |
+| NetBSD 10.2 | i386 | `gmake native` | checks, live agents and plugins |
+| OpenBSD 7.9 | x86_64, i386 | `gmake native` | checks, live agents and plugins |
 
-Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. `make musl` also supports aarch64, not tested yet.
+Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. The FreeBSD i386 binary also runs on FreeBSD 15 amd64, through its 32-bit support.
 
 Release archives come from `make dist`. The Linux i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, for the i586 (no cmov, SSE or MMX), so the binary runs on any 32-bit PC from the Pentium and the AMD K6 on.
 
