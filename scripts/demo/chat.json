@@ -1,0 +1,3 @@
+[{"say": "hey jarvis, what can you do for me?", "quiet": 10},
+ {"say": "@oracle in one sentence: why is a static binary handy on an old machine?", "quiet": 10},
+ {"say": "jarvis, ask oracle for one fun fact about crabs (from what it knows, no web search)", "quiet": 20, "max": 240}]

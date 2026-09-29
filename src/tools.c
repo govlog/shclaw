@@ -265,6 +265,15 @@ const char *tool_check_args(int tool_id, cJSON *input, char *out, size_t out_sz)
         if (!v || cJSON_IsNull(v)) {
             ok = !p->required;
         } else if (p->type == TC_STRING) {
+            /* Small models send JSON values unquoted (test_input: {...}):
+             * take their JSON text */
+            if ((cJSON_IsObject(v) || cJSON_IsArray(v)) && !p->choices) {
+                char *text = cJSON_PrintUnformatted(v);
+                if (text)
+                    cJSON_ReplaceItemInObject(input, p->name, cJSON_CreateString(text));
+                free(text);
+                v = cJSON_GetObjectItem(input, p->name);
+            }
             ok = cJSON_IsString(v);
             if (ok && p->choices && v->valuestring[0]) {
                 char pat[TC_BUF_SM + 2], val[TC_BUF_SM];
@@ -403,6 +412,44 @@ static void unescape_once(char *s) {
         *w++ = c;
     }
     *w = '\0';
+}
+
+/* Small models write the schema as raw JSON inside the C string:
+ *   const char *TC_PLUGIN_SCHEMA = "{"type":"object",...}";
+ * When the text between the outer quotes is valid JSON, escape it. */
+static void fix_schema_quotes(cJSON *input) {
+    const char *code = j_str(input, "code");
+    const char *decl = code ? strstr(code, "TC_PLUGIN_SCHEMA") : NULL;
+    if (!decl) return;
+    const char *eol = strchr(decl, '\n');
+    if (!eol) eol = decl + strlen(decl);
+    const char *open = memchr(decl, '"', (size_t)(eol - decl));
+    const char *close = eol;
+    while (close > decl && *close != ';') close--;
+    while (close > decl && (close[-1] == ' ' || close[-1] == '\t')) close--;
+    if (!open || close <= open + 1 || close[-1] != '"') return;
+    close--;                                  /* the closing quote */
+
+    char *raw = strndup(open + 1, (size_t)(close - open - 1));
+    cJSON *json = raw && strchr(raw, '"') && !strstr(raw, "\\\"")
+        ? cJSON_ParseWithOpts(raw, NULL, 1) : NULL;
+    char *text = json ? cJSON_PrintUnformatted(json) : NULL;
+    size_t cap = text ? (size_t)(open - code) + 2 * strlen(text) + strlen(close) + 2 : 0;
+    char *fixed = text ? malloc(cap) : NULL;
+    if (fixed) {
+        size_t off = (size_t)(open + 1 - code);
+        memcpy(fixed, code, off);
+        for (const char *c = text; *c; c++) {
+            if (*c == '"' || *c == '\\') fixed[off++] = '\\';
+            fixed[off++] = *c;
+        }
+        memcpy(fixed + off, close, strlen(close) + 1);
+        cJSON_ReplaceItemInObject(input, "code", cJSON_CreateString(fixed));
+    }
+    free(fixed);
+    free(text);
+    cJSON_Delete(json);
+    free(raw);
 }
 
 static void clear_agent(agent_ctx_t *a, int mem, int facts) {
@@ -563,6 +610,8 @@ const char *execute_tool(int tool_id, cJSON *input, agent_ctx_t *ctx,
          * literal "\n" cannot be C: decode the escapes once more. */
         if (code && !strchr(code, '\n') && strstr(code, "\\n"))
             unescape_once(cJSON_GetObjectItem(input, "code")->valuestring);
+        fix_schema_quotes(input);
+        code = j_str(input, "code");
         snprintf(name, sizeof(name), "%s", j_str(input, "name"));
         size_t nlen = strlen(name);
         if (nlen > 2 && strcmp(name + nlen - 2, ".c") == 0)

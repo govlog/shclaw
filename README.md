@@ -1,15 +1,13 @@
 <div align="center">
 
-# shclaw
+<img src="doc/images/logo.png" alt="shclaw" width="560">
 
 **Self-contained multi-agent AI orchestrator in C.**
 **Single static binary. No dependencies. No runtime.**
 
-<br>
-
 ![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![musl](https://img.shields.io/badge/musl-530K-blue?style=flat-square)
+![musl](https://img.shields.io/badge/musl-540K-blue?style=flat-square)
 ![cosmo](https://img.shields.io/badge/cosmo-970K-blue?style=flat-square)
 ![Lines](https://img.shields.io/badge/~7500_lines-grey?style=flat-square)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
@@ -17,13 +15,7 @@
 ![NetBSD](https://img.shields.io/badge/NetBSD-FF6600?style=flat-square&logo=netbsd&logoColor=white)
 ![OpenBSD](https://img.shields.io/badge/OpenBSD-F2CA30?style=flat-square&logo=openbsd&logoColor=black)
 
-<br>
-
 *IRC · Multi-LLM · Runtime C plugins · Scheduling · Inter-agent messaging*
-
-<br>
-
-<img src="screen.png" alt="shclaw TUI" width="700">
 
 </div>
 
@@ -37,6 +29,24 @@ shclaw runs a team of AI agents from one static binary under 1 MB. The agents ta
 - **Batteries included.** TLS, HTTP, IRC, JSON, scheduler, memory and a terminal UI are all in the binary.
 
 > **Fair warning.** Agents run shell commands, read and write files, call the network and compile C. Run shclaw somewhere you don't care about: a VM, a container, a Pi on a VLAN.
+
+---
+
+## In action
+
+Real sessions on a local IRC server with `gpt-4.1-nano`, recorded and rendered by `scripts/demo/`.
+
+**Chat and delegation.** Without a mention, the hub answers; `@oracle` goes to a specialist; jarvis delegates on its own with `send_message`.
+
+<img src="doc/images/irc-chat.png" alt="Chat and delegation on IRC" width="820">
+
+**The builder writes a tool.** It writes a C plugin, test-runs it, and jarvis calls the new tool right away.
+
+<img src="doc/images/irc-builder.png" alt="The builder creates a weather plugin" width="820">
+
+**Memory and reminders.** Facts are remembered between sessions, and a scheduled task comes back on time.
+
+<img src="doc/images/irc-reminders.png" alt="Memory and a reminder on IRC" width="820">
 
 ---
 
@@ -229,7 +239,7 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 | Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl` | checks, live agents and plugins |
 | FreeBSD 15.1 | x86_64 | `make cosmo`, `gmake native` | checks, live agents and plugins |
 | FreeBSD 14.5 | i386 | `gmake native` | checks, live agents and plugins |
-| NetBSD 10.2, 11.99 (smolBSD) | x86_64 | `make cosmo` | checks, live agents and plugins |
+| NetBSD 10.2, 11.99 (smolBSD) | x86_64 | `make cosmo`, `gmake native` (10.2) | checks, live agents and plugins |
 | NetBSD 10.2 | i386 | `gmake native` | checks, live agents and plugins |
 | OpenBSD 7.9 | x86_64, i386 | `gmake native` | checks, live agents and plugins |
 
@@ -245,6 +255,8 @@ Release archives come from `make dist`. The Linux i386 one comes from `scripts/r
 make check         # tests/check.c: HTTP, IRC, plugins, prompts, dates, tool arguments...
 make check-cosmo   # the same checks, built with cosmocc
 ```
+
+`scripts/pipeline.sh` builds, checks and packages every platform of the table above from one git revision: locally, in Docker, on a Raspberry Pi over SSH and in BSD VMs, one at a time. `--live` adds a smoke test with a real model. Its settings go in `scripts/pipeline.conf` (see `scripts/pipeline.conf.example`).
 
 - [Plugin API](doc/plugin-api.md): writing plugins, the `tc_*` functions
 - [Internals](doc/internals.md): event loop, harness, prompt caching, plugin compilation, builds

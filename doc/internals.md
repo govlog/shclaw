@@ -25,6 +25,8 @@ Small models loop, invent tools and send broken arguments. The session loop answ
 | Text answer to another agent's request, without `send_message` | Sent back to that agent, marked as an answer so it cannot start a reply loop |
 | Rescheduling a due reminder instead of delivering it | Due tasks read "do it now"; one-shot tasks in the past are refused |
 | Wrong absolute dates | `schedule_task` also takes `in_minutes` |
+| A JSON object where a string is expected (`test_input: {...}`) | Taken as its JSON text |
+| Plugin schema written as raw JSON inside the C string | Its quotes are escaped when the text is valid JSON |
 
 Providers:
 

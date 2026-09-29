@@ -1,0 +1,37 @@
+# scripts/pipeline.conf: host specifics for scripts/pipeline.sh
+# Copy this file to scripts/pipeline.conf (not committed) and adapt it.
+
+# Output: <OUT>/<version>/ gets the archives, SHA256SUMS, report.md, logs/
+OUT=$HOME/dev/shclaw-release/pipeline
+
+# Cosmopolitan toolchain to reuse (1.4G): the one vendor.sh fetched here
+COSMO_DIR=$PWD/vendor/cosmo
+
+# Live smoke test (--live): an instance with etc/config.ini (mode 0600,
+# OpenAI key), etc/agents/{jarvis,oracle,builder}.ini and
+# plugins/{weather_city,currency_exchange}.c
+LIVE_DIR=$HOME/dev/shclaw-release/live
+
+# ARM board: armv7l builds in its armhf userland (through linux32 on a
+# 64-bit kernel), aarch64 in an Alpine aarch64 chroot (needs sudo there)
+PI_HOST=pi@raspberrypi.local
+PI_DIR=shclaw-pipeline              # work dir, relative to the Pi home
+PI_A64_ROOT=shclaw-test/a64/root    # Alpine aarch64 chroot, relative to home
+
+# BSD VMs: disks in $VM_DIR/vm, root SSH key $VM_DIR/vmkey. Each guest needs
+# cc and gmake: OpenBSD `pkg_add gmake`, FreeBSD `pkg install gmake`, NetBSD
+# `pkg_add gmake` with PKG_PATH=https://cdn.netbsd.org/pub/pkgsrc/packages/
+# NetBSD/<x86_64|i386>/10.0_<quarter>/All (IPv4 only under qemu user networking:
+# pin cdn.netbsd.org in /etc/hosts). Vendored sources come with the source
+# bundle, so builds need no network; the live test does.
+VM_DIR=$HOME/dev/shclaw-release/bsd
+VM_MIN_FREE_GB=6                    # do not boot a VM with less RAM available
+# name           qemu               MB   CPUs disk          bus    NIC            ssh
+VMS="
+openbsd-amd64    qemu-system-x86_64 2048 2    obsd64.qcow2  ide    e1000          18523
+openbsd-i386     qemu-system-i386   1024 1    obsd32.qcow2  ide    e1000          18532
+freebsd-i386     qemu-system-i386   1024 1    fbsd32.qcow2  virtio virtio-net-pci 18533
+netbsd-i386      qemu-system-i386   1024 1    nbsd32.qcow2  ide    e1000          18534
+freebsd-amd64    qemu-system-x86_64 2048 2    fbsd64.qcow2  virtio virtio-net-pci 18522
+netbsd-amd64     qemu-system-x86_64 2048 2    nbsd64.qcow2  ide    e1000          18535
+"

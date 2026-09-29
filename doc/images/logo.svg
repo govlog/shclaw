@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" width="640" height="240">
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2130"/>
+      <stop offset="1" stop-color="#11151f"/>
+    </linearGradient>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff8a5c"/>
+      <stop offset="1" stop-color="#f0513a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- card -->
+  <rect x="4" y="4" width="632" height="232" rx="28" fill="url(#card)" stroke="#2c3446" stroke-width="3"/>
+
+  <g transform="translate(40 24) scale(0.9)">
+    <!-- legs -->
+    <g stroke="#d9442e" stroke-width="9" stroke-linecap="round" fill="none">
+      <path d="M58 150 Q30 158 22 182"/>
+      <path d="M62 166 Q40 178 38 204"/>
+      <path d="M76 178 Q62 196 64 218"/>
+      <path d="M162 150 Q190 158 198 182"/>
+      <path d="M158 166 Q180 178 182 204"/>
+      <path d="M144 178 Q158 196 156 218"/>
+    </g>
+
+    <!-- arms -->
+    <g stroke="#d9442e" stroke-width="11" stroke-linecap="round" fill="none">
+      <path d="M52 124 Q22 108 26 74"/>
+      <path d="M168 124 Q200 108 196 74"/>
+    </g>
+
+    <!-- left claw, pinching a chat bubble -->
+    <g transform="translate(26 56) rotate(-18)">
+      <rect x="-30" y="-58" width="54" height="34" rx="10" fill="#e6edf3" stroke="#9aa7b8" stroke-width="3"/>
+      <path d="M-14 -25 L-10 -14 L-3 -25 Z" fill="#e6edf3" stroke="#9aa7b8" stroke-width="3" stroke-linejoin="round"/>
+      <text x="-3" y="-34" text-anchor="middle" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-weight="700" font-size="20" fill="#1b2130">#hi</text>
+      <path d="M-26 6 C-30 -22 -8 -30 4 -20 L-6 -6 L16 -12 C20 10 4 26 -10 24 C-20 22 -25 16 -26 6 Z"
+            fill="url(#shell)" stroke="#b83a24" stroke-width="4" stroke-linejoin="round"/>
+    </g>
+
+    <!-- right claw, waving open -->
+    <g transform="translate(198 56) rotate(20)">
+      <path d="M-18 8 C-24 -24 4 -34 18 -20 L2 -8 L22 0 C20 18 4 28 -8 24 C-14 22 -17 16 -18 8 Z"
+            fill="url(#shell)" stroke="#b83a24" stroke-width="4" stroke-linejoin="round"/>
+    </g>
+
+    <!-- eye stalks and eyes, looking at the name -->
+    <g stroke="#b83a24" stroke-width="7" stroke-linecap="round">
+      <line x1="92" y1="92" x2="86" y2="58"/>
+      <line x1="128" y1="92" x2="136" y2="58"/>
+    </g>
+    <circle cx="86" cy="50" r="15" fill="#ffffff" stroke="#b83a24" stroke-width="4"/>
+    <circle cx="136" cy="50" r="15" fill="#ffffff" stroke="#b83a24" stroke-width="4"/>
+    <circle cx="92" cy="48" r="6.5" fill="#1b2130"/>
+    <circle cx="142" cy="48" r="6.5" fill="#1b2130"/>
+    <circle cx="94" cy="45.5" r="2" fill="#ffffff"/>
+    <circle cx="144" cy="45.5" r="2" fill="#ffffff"/>
+
+    <!-- body: the crab's shell is a shell -->
+    <ellipse cx="110" cy="140" rx="74" ry="54" fill="url(#shell)" stroke="#b83a24" stroke-width="5"/>
+    <ellipse cx="84" cy="112" rx="22" ry="9" fill="#ffffff" opacity="0.25" transform="rotate(-20 84 112)"/>
+    <rect x="72" y="112" width="76" height="44" rx="10" fill="#161b26" stroke="#b83a24" stroke-width="4"/>
+    <text x="82" y="142" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-weight="700" font-size="24" fill="#8ef58a">&gt;</text>
+    <rect x="102" y="126" width="13" height="19" rx="2" fill="#8ef58a"/>
+    <path d="M98 170 Q110 180 122 170" stroke="#7a2414" stroke-width="4" stroke-linecap="round" fill="none"/>
+    <circle cx="80" cy="168" r="6" fill="#ff9f86" opacity="0.8"/>
+    <circle cx="140" cy="168" r="6" fill="#ff9f86" opacity="0.8"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="262" y="134" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-weight="700" font-size="84" letter-spacing="-2">
+    <tspan fill="#e6edf3">sh</tspan><tspan fill="#ff6b4a">claw</tspan>
+  </text>
+  <text x="266" y="176" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="19" fill="#8b949e">AI agents · one tiny binary</text>
+  <text x="266" y="202" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="15" fill="#5b6576">$ ./shclaw -d<tspan fill="#8ef58a"> ▌</tspan></text>
+</svg>

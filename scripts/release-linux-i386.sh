@@ -4,15 +4,23 @@
 # PC from the Pentium and the AMD K6 on. musl 1.2.6 comes from source with the patches
 # Alpine 3.24 applies (CVE-2026-6042, CVE-2026-40200), checked against the
 # sha512 sums of Alpine's APKBUILD.
-# Needs Docker. Builds the committed tree (HEAD) into dist/.
-# Usage: scripts/release-linux-i386.sh
+# Needs Docker. Builds a source tarball (default: the committed tree, HEAD;
+# vendor/ may be included) into an output directory (default: dist/).
+# Usage: scripts/release-linux-i386.sh [source.tar [output dir]]
 set -e
 cd "$(dirname "$0")/.."
-mkdir -p dist
+src=${1:-}
+out=${2:-dist}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-git archive -o "$tmp/src.tar" HEAD
-docker run --rm --platform linux/386 -v "$tmp/src.tar:/src.tar:ro" -v "$PWD/dist:/out" alpine:3.24 sh -ec '
+if [ -z "$src" ]; then
+    git archive -o "$tmp/src.tar" HEAD
+    src=$tmp/src.tar
+fi
+mkdir -p "$out"
+src=$(readlink -f "$src")
+out=$(readlink -f "$out")
+docker run --rm --platform linux/386 -v "$src:/src.tar:ro" -v "$out:/out" alpine:3.24 sh -ec '
   apk add --no-cache build-base git curl util-linux >/dev/null 2>&1
   A=https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.24-stable/main/musl
   cd /tmp
@@ -33,12 +41,15 @@ SUMS
   ar rcs /opt/musl/lib/libssp_nonshared.a /tmp/sscfl.o
   printf "#!/bin/sh\nexec /opt/musl/bin/musl-gcc %s \"\$@\"\n" "$BASE" > /usr/local/bin/i386-cc
   chmod +x /usr/local/bin/i386-cc
-  mkdir /build && tar -xf /src.tar -C /build && cd /build && ./vendor.sh >/dev/null
+  mkdir /build && tar -xf /src.tar -C /build && cd /build
+  [ -f vendor/bearssl/Makefile ] || ./vendor.sh >/dev/null
   # musl-gcc cannot link static-PIE (its specs always start with Scrt1.o),
   # and Alpine gcc makes PIE by default: ask for a plain static binary
   mk() { setarch i686 make "$@" MUSL_CC=i386-cc ARCH=i386 CF_PROT= PIE=-fno-pie "STATIC=-static -no-pie"; }
-  mk musl 2>&1 | grep -E "warning:|error:|Built" || true
-  mk check 2>&1 | grep -E "FAIL|passed|failed|error:" || true
+  mk musl > /tmp/musl.log 2>&1 || { tail -30 /tmp/musl.log; exit 1; }
+  grep -E "warning:|Built" /tmp/musl.log || true
+  mk check > /tmp/check.log 2>&1 || { grep -E "FAIL|error" /tmp/check.log; tail -5 /tmp/check.log; exit 1; }
+  grep -E "passed" /tmp/check.log
   mk dist
   cp dist/*.tar.gz /out/
   chown -R '"$(id -u):$(id -g)"' /out'

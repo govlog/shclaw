@@ -2,6 +2,8 @@
 
 A plugin is a single `.c` file, usually written by an agent at runtime. TinyCC compiles it in memory: no `.so` ever reaches the disk.
 
+<img src="images/irc-builder.png" alt="The builder creates a weather plugin on IRC" width="820">
+
 ## Structure
 
 Every plugin includes `tc_plugin.h` and exports four things:
@@ -44,7 +46,7 @@ The builder's template is [`plugins/_template.c`](../plugins/_template.c). The p
 
 ## Testing
 
-`create_plugin` takes an optional `test_input` (a JSON object). After compiling, the daemon runs the plugin once with it and returns the output with a trace of each HTTP call: URL, status, start of the body, and a note when the body did not fit the buffer. A crash, a timeout, an empty output or an output starting with `error` makes `create_plugin` fail, so the builder fixes the code. Compile errors come back with the source line of each error.
+`create_plugin` takes an optional `test_input` (a JSON object, sent as text or as an object). After compiling, the daemon runs the plugin once with it and returns the output with a trace of each HTTP call: URL, status, start of the body, and a note when the body did not fit the buffer. A crash, a timeout, an empty output or an output starting with `error` makes `create_plugin` fail, so the builder fixes the code. Compile errors come back with the source line of each error.
 
 ## Available functions
 

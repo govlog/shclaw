@@ -240,6 +240,13 @@ static void check_args(void) {
           strstr(out, "hourly"), "bad enum value accepted: %s", out);
     cJSON_Delete(in);
 
+    /* A JSON object where a string is expected (test_input) is taken as text */
+    in = cJSON_Parse("{\"name\":\"x\",\"code\":\"y\",\"test_input\":{\"city\":\"Paris\"}}");
+    CHECK(!tool_check_args(TOOL_CREATE_PLUGIN, in, out, sizeof(out)) &&
+          !strcmp(j_str(in, "test_input") ? j_str(in, "test_input") : "", "{\"city\":\"Paris\"}"),
+          "object test_input refused: %s", out);
+    cJSON_Delete(in);
+
     CHECK(tool_find("exec") == TOOL_EXEC && tool_find("nope") < 0, "tool_find");
     CHECK(!tool_name_valid("../x") && !tool_name_valid("") && tool_name_valid("my_tool-2"),
           "tool_name_valid");
@@ -406,6 +413,30 @@ static void check_plugins(const char *tmp) {
     CHECK(!strncmp(res, "Plugin 'twice' compiled", 23), "twice-escaped code: %s", res);
     res = plugin_execute(&r, "twice", NULL, 0, out, sizeof(out));
     CHECK(res && !strcmp(res, "a\nb"), "twice-escaped string literal: '%s'", res ? res : "(null)");
+
+    /* create_plugin with the schema as raw JSON in the C string, as
+     * gpt-4.1-nano writes it */
+    input = cJSON_CreateObject();
+    cJSON_AddStringToObject(input, "name", "rawschema");
+    cJSON_AddStringToObject(input, "code",
+        "#include \"tc_plugin.h\"\n"
+        "const char *TC_PLUGIN_NAME = \"rawschema\";\n"
+        "const char *TC_PLUGIN_DESC = \"test\";\n"
+        "const char *TC_PLUGIN_SCHEMA = \"{\"type\":\"object\",\"properties\":"
+        "{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}\";\n"
+        "const char *tc_execute(const char *in) { return in; }\n");
+    res = execute_tool(TOOL_CREATE_PLUGIN, input, &a, out, sizeof(out));
+    cJSON_Delete(input);
+    CHECK(!strncmp(res, "Plugin 'rawschema' compiled", 27), "raw JSON schema: %s", res);
+    schemas = plugin_get_schemas(&r);
+    cJSON *sc;
+    int city = 0;
+    cJSON_ArrayForEach(sc, schemas)
+        if (!strcmp(j_str(sc, "name"), "rawschema"))
+            city = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(sc,
+                       "input_schema"), "properties"), "city") != NULL;
+    cJSON_Delete(schemas);
+    CHECK(city, "raw JSON schema lost its properties");
 }
 
 /* ── IRC over a socketpair (no TLS) ── */
