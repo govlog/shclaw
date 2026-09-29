@@ -1,7 +1,7 @@
 #!/bin/sh
 # Release archive for Linux i386: musl, BearSSL, TinyCC and shclaw all compiled for
-# the i686 baseline without SSE or MMX, so the binary runs on any 32-bit x86
-# PC from the Pentium Pro on. musl 1.2.6 comes from source with the patches
+# the i586 baseline (no cmov, SSE or MMX), so the binary runs on any 32-bit x86
+# PC from the Pentium and the AMD K6 on. musl 1.2.6 comes from source with the patches
 # Alpine 3.24 applies (CVE-2026-6042, CVE-2026-40200), checked against the
 # sha512 sums of Alpine's APKBUILD.
 # Needs Docker. Builds the committed tree (HEAD) into dist/.
@@ -26,7 +26,7 @@ a64ab7688d1a85e560b5687783df482d2467a79a74400da5a1601382847d6b4e6a79b7529a8dc80c
 SUMS
   tar -xzf musl-1.2.6.tar.gz && cd musl-1.2.6
   patch -p1 -s < ../CVE-2026-6042.patch && patch -p1 -s < ../CVE-2026-40200.patch
-  BASE="-march=i686 -mtune=generic -mfpmath=387 -mno-sse -mno-mmx"
+  BASE="-march=i586 -mtune=generic -mfpmath=387 -mno-sse -mno-mmx"
   CFLAGS="$BASE -O2" ./configure --prefix=/opt/musl --disable-shared --enable-wrapper=gcc >/dev/null
   make -j$(nproc) >/dev/null && make install >/dev/null
   gcc $BASE -O2 -fPIC -c ../__stack_chk_fail_local.c -o /tmp/sscfl.o

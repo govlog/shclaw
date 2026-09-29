@@ -232,7 +232,7 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 
 Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. `make musl` also supports aarch64, not tested yet.
 
-Release archives come from `make dist`. The Linux i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, without SSE, so the binary runs on any 32-bit PC from the Pentium Pro on.
+Release archives come from `make dist`. The Linux i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, for the i586 (no cmov, SSE or MMX), so the binary runs on any 32-bit PC from the Pentium and the AMD K6 on.
 
 ---
 
