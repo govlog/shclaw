@@ -77,7 +77,7 @@ typedef struct {
 
 static void sb_push(scrollback_t *sb, const char *line) {
     if (sb->count >= MAX_LINES) {
-        memmove(sb->lines[0], sb->lines[1], (MAX_LINES - 1) * MAX_LINE_LEN);
+        memmove(sb->lines, sb->lines + 1, (MAX_LINES - 1) * sizeof(sb->lines[0]));
         sb->count = MAX_LINES - 1;
     }
     snprintf(sb->lines[sb->count], MAX_LINE_LEN, "%s", line);

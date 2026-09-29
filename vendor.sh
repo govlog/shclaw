@@ -23,8 +23,9 @@ VENDOR="$(dirname "$0")/vendor"
 mkdir -p "$VENDOR"
 
 sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"
-    else shasum -a 256 "$1"; fi | cut -d' ' -f1
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+    else command sha256 -q "$1"; fi   # BSD (command: not this function)
 }
 
 check_sha256() {

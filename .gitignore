@@ -4,6 +4,7 @@ shclaw
 shclaw.com
 shclaw.com.dbg
 shclaw.com.bak
+dist/
 
 # Build artifacts
 build/

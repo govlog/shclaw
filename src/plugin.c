@@ -229,6 +229,76 @@ static const struct { const char *name; const void *fn; } plugin_api[] = {
     {"tc_json_double",     tc_plugin_json_double},
 };
 
+/* TinyCC calls helpers on its own: memset for zeroed arrays, memmove for
+ * struct copies, and routines for what the CPU lacks (division and 64-bit
+ * arithmetic on 32-bit CPUs, unsigned 64-bit <-> floating conversions).
+ * Plugins are built with -nostdlib, so the daemon provides them. */
+#if defined(__arm__)
+/* EABI helpers from libgcc and the C library. Some have their own calling
+ * conventions, so only their addresses are used. */
+#define HELPER(f) {#f, f}
+extern void __aeabi_memcpy(void), __aeabi_memmove(void), __aeabi_memmove4(void),
+            __aeabi_memmove8(void), __aeabi_memset(void), __aeabi_idiv(void),
+            __aeabi_uidiv(void), __aeabi_idivmod(void), __aeabi_uidivmod(void),
+            __aeabi_ldivmod(void), __aeabi_uldivmod(void), __aeabi_l2f(void),
+            __aeabi_l2d(void), __aeabi_ul2f(void), __aeabi_ul2d(void),
+            __aeabi_f2lz(void), __aeabi_d2lz(void), __aeabi_f2ulz(void),
+            __aeabi_d2ulz(void), __aeabi_lasr(void), __aeabi_llsr(void),
+            __aeabi_llsl(void);
+static const struct { const char *name; const void *fn; } plugin_helpers[] = {
+    HELPER(__aeabi_memcpy), HELPER(__aeabi_memmove), HELPER(__aeabi_memmove4),
+    HELPER(__aeabi_memmove8), HELPER(__aeabi_memset), HELPER(__aeabi_idiv),
+    HELPER(__aeabi_uidiv), HELPER(__aeabi_idivmod), HELPER(__aeabi_uidivmod),
+    HELPER(__aeabi_ldivmod), HELPER(__aeabi_uldivmod), HELPER(__aeabi_l2f),
+    HELPER(__aeabi_l2d), HELPER(__aeabi_ul2f), HELPER(__aeabi_ul2d),
+    HELPER(__aeabi_f2lz), HELPER(__aeabi_d2lz), HELPER(__aeabi_f2ulz),
+    HELPER(__aeabi_d2ulz), HELPER(__aeabi_lasr), HELPER(__aeabi_llsr),
+    HELPER(__aeabi_llsl),
+};
+#else
+static void *tc_plugin_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
+/* The other helpers are plain casts and operators: the compiler turns them
+ * into instructions, or into calls to its own library */
+#if defined(__x86_64__) || defined(__i386__)
+static float tc_floatundisf(unsigned long long u) { return (float)u; }
+static double tc_floatundidf(unsigned long long u) { return (double)u; }
+static long double tc_floatundixf(unsigned long long u) { return (long double)u; }
+static unsigned long long tc_fixunssfdi(float f) { return (unsigned long long)f; }
+static unsigned long long tc_fixunsdfdi(double d) { return (unsigned long long)d; }
+static unsigned long long tc_fixunsxfdi(long double x) { return (unsigned long long)x; }
+static long long tc_fixxfdi(long double x) { return (long long)x; }
+#endif
+#if defined(__i386__)
+typedef long long ll;
+typedef unsigned long long ull;
+static ll tc_divdi3(ll a, ll b) { return a / b; }
+static ll tc_moddi3(ll a, ll b) { return a % b; }
+static ull tc_udivdi3(ull a, ull b) { return a / b; }
+static ull tc_umoddi3(ull a, ull b) { return a % b; }
+static ll tc_ashrdi3(ll a, int n) { return a >> n; }
+static ull tc_lshrdi3(ull a, int n) { return a >> n; }
+static ull tc_ashldi3(ull a, int n) { return a << n; }
+static ll tc_fixsfdi(float f) { return (ll)f; }
+static ll tc_fixdfdi(double d) { return (ll)d; }
+#endif
+static const struct { const char *name; const void *fn; } plugin_helpers[] = {
+    {"memcpy",  tc_plugin_memcpy},
+    {"memmove", tc_plugin_memmove},
+    {"memset",  tc_plugin_memset},
+#if defined(__x86_64__) || defined(__i386__)
+    {"__floatundisf", tc_floatundisf}, {"__floatundidf", tc_floatundidf},
+    {"__floatundixf", tc_floatundixf}, {"__fixunssfdi", tc_fixunssfdi},
+    {"__fixunsdfdi", tc_fixunsdfdi}, {"__fixunsxfdi", tc_fixunsxfdi},
+    {"__fixxfdi", tc_fixxfdi},
+#endif
+#if defined(__i386__)
+    {"__divdi3", tc_divdi3}, {"__moddi3", tc_moddi3}, {"__udivdi3", tc_udivdi3},
+    {"__umoddi3", tc_umoddi3}, {"__ashrdi3", tc_ashrdi3}, {"__lshrdi3", tc_lshrdi3},
+    {"__ashldi3", tc_ashldi3}, {"__fixsfdi", tc_fixsfdi}, {"__fixdfdi", tc_fixdfdi},
+#endif
+};
+#endif
+
 const char *plugin_api_names(void) {
     static char names[TC_BUF_MD];
     if (!names[0]) {
@@ -252,6 +322,8 @@ static const char *build(TCCState *tcc, const char *src, const char *code, diag_
     tcc_add_include_path(tcc, "include");
     for (size_t i = 0; i < sizeof(plugin_api) / sizeof(plugin_api[0]); i++)
         tcc_add_symbol(tcc, plugin_api[i].name, plugin_api[i].fn);
+    for (size_t i = 0; i < sizeof(plugin_helpers) / sizeof(plugin_helpers[0]); i++)
+        tcc_add_symbol(tcc, plugin_helpers[i].name, plugin_helpers[i].fn);
 
     if ((code ? tcc_compile_string(tcc, code) : tcc_add_file(tcc, src)) == -1 ||
         tcc_relocate(tcc) == -1)

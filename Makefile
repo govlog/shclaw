@@ -20,6 +20,9 @@ PREFIX   = /opt/shclaw
 ARCH    := $(shell uname -m)
 
 CF_PROT := $(if $(filter x86_64 i686 i386,$(ARCH)),-fcf-protection,)
+# TinyCC keeps the i386 stack 4-byte aligned, gcc code expects 16 bytes
+# (SSE): the functions that plugins call must realign it on entry
+REALIGN := $(if $(filter i686 i386,$(ARCH)),-mstackrealign,)
 
 ifeq ($(filter x86_64 aarch64 i686 i386,$(ARCH)),)
   STATIC := -static
@@ -45,6 +48,7 @@ MUSL_CFLAGS  = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra -Wno-unused-parameter -W
                -D_FORTIFY_SOURCE=2 \
                $(PIE) \
                $(CF_PROT) \
+               $(REALIGN) \
                -fno-delete-null-pointer-checks \
                -fno-strict-overflow \
                -fno-strict-aliasing \
@@ -55,7 +59,7 @@ MUSL_LDFLAGS = $(STATIC) -Wl,--gc-sections -L vendor/bearssl/build -L vendor/tcc
                -Wl,-z,relro,-z,now \
                -Wl,-z,noexecstack \
                -Wl,-z,separate-code
-MUSL_LIBS    = -lbearssl -ltcc -lpthread -ldl -lm
+MUSL_LIBS    = -lbearssl -ltcc -lpthread -lm
 MUSL_BIN     = shclaw
 
 # -------------------------------------------------------------------
@@ -90,7 +94,7 @@ TCC_A     = vendor/tcc/libtcc.a
 # -------------------------------------------------------------------
 # Phony targets
 # -------------------------------------------------------------------
-.PHONY: help musl cosmo check check-cosmo clean install uninstall docker-image smolbsd
+.PHONY: help musl cosmo native check check-cosmo check-native dist clean install uninstall docker-image smolbsd
 
 # -------------------------------------------------------------------
 # Default: help
@@ -100,9 +104,11 @@ help:
 	@echo ""
 	@echo "  make musl           Build static Linux binary (~530K)"
 	@echo "  make cosmo          Build multi-platform binary (~970K)"
-	@echo "                      Runs on Linux/NetBSD/FreeBSD/OpenBSD (x86_64)"
-	@echo "  make check          Run tests/check.c (check-cosmo: same with cosmocc)"
+	@echo "                      Runs on Linux/FreeBSD/NetBSD (x86_64); OpenBSD: make native"
+	@echo "  make native         Build static binary with cc (FreeBSD/OpenBSD, run with gmake)"
+	@echo "  make check          Run tests/check.c (check-cosmo, check-native: other toolchains)"
 	@echo "  make install        Install to PREFIX (default: /opt/shclaw)"
+	@echo "  make dist           Release archives of the built binaries, in dist/"
 	@echo "  make docker-image   Build Docker image (requires: make musl first)"
 	@echo "  make smolbsd        Build smolBSD service (requires: make cosmo first)"
 	@echo "                      AGENT_DIR=/path/to/instance"
@@ -137,7 +143,7 @@ vendor/bearssl/build/libbearssl.a.musl: vendor/bearssl/Makefile
 	@# Clean cosmo-built libs if switching toolchains
 	@rm -f vendor/bearssl/build/libbearssl.a.cosmo
 	$(MAKE) -C vendor/bearssl clean 2>/dev/null || true
-	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) CFLAGS="-fPIC -Os $(SECTIONS)" -j$$(nproc)
+	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) CFLAGS="-fPIC -Os $(SECTIONS)" -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
 vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
@@ -145,7 +151,7 @@ vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
 	cd vendor/tcc && ./configure --cc=$(MUSL_CC)
 	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) \
-		CFLAGS="-Wall -Os $(SECTIONS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(nproc)
+		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
 # -------------------------------------------------------------------
@@ -165,7 +171,7 @@ vendor/bearssl/build/libbearssl.a.cosmo: vendor/bearssl/Makefile $(COSMO_DIR)/bi
 		AR="$(abspath $(COSMO_AR))" \
 		CFLAGS="-Os $(SECTIONS)" \
 		DLL=no TOOLS=no TESTS=no \
-		-j$$(nproc)
+		-j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
 vendor/tcc/libtcc.a.cosmo: vendor/tcc/.cosmo-patched $(COSMO_DIR)/bin/cosmocc
@@ -175,8 +181,8 @@ vendor/tcc/libtcc.a.cosmo: vendor/tcc/.cosmo-patched $(COSMO_DIR)/bin/cosmocc
 	$(MAKE) -C vendor/tcc libtcc.a \
 		CC="$(abspath $(COSMO_CC))" \
 		AR="$(abspath $(COSMO_AR))" \
-		CFLAGS="-Wall -Os $(SECTIONS) -Wdeclaration-after-statement -Wno-unused-result" \
-		-j$$(nproc)
+		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 -Wdeclaration-after-statement -Wno-unused-result" \
+		-j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
 # -------------------------------------------------------------------
@@ -198,6 +204,13 @@ build/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h | build
 build:
 	mkdir -p build
 
+# FreeBSD/OpenBSD: the musl build with the system compiler
+native:
+	$(MAKE) musl MUSL_CC=cc
+
+check-native:
+	$(MAKE) check MUSL_CC=cc
+
 # -------------------------------------------------------------------
 # Cosmopolitan APE build
 # -------------------------------------------------------------------
@@ -206,9 +219,10 @@ cosmo: $(COSMO_BIN)
 $(COSMO_BIN): $(COSMO_OBJS) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/libtcc.a.cosmo
 	$(COSMO_CC) $(COSMO_CFLAGS) $(COSMO_LDFLAGS) -o $@ $(COSMO_OBJS) $(COSMO_LIBS)
 	@rm -f $@.bak
-	$(COSMO_DIR)/bin/assimilate $@
+	@# -b keeps the FreeBSD OS/ABI: FreeBSD refuses an unbranded ELF
+	$(COSMO_DIR)/bin/assimilate -b $@
 	@echo "==> Built $(COSMO_BIN) ($$(du -h $(COSMO_BIN) | cut -f1))"
-	@echo "    Runs on: Linux, NetBSD, FreeBSD, OpenBSD (x86_64)"
+	@echo "    Runs on: Linux, FreeBSD, NetBSD (x86_64)"
 
 build-cosmo/%.o: src/%.c include/tc.h include/prompt.h vendor/cjson/cJSON.c $(COSMO_DIR)/bin/cosmocc | build-cosmo
 	$(COSMO_CC) $(COSMO_CFLAGS) -c -o $@ $<
@@ -232,6 +246,26 @@ check: $(CHECK_MUSL) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.
 check-cosmo: $(CHECK_COSMO) vendor/bearssl/build/libbearssl.a.cosmo vendor/tcc/libtcc.a.cosmo
 	$(COSMO_CC) $(COSMO_CFLAGS) $(COSMO_LDFLAGS) -o build-cosmo/check tests/check.c $(CHECK_COSMO) $(COSMO_LIBS)
 	./build-cosmo/check
+
+# -------------------------------------------------------------------
+# Release archives: each built binary with what an instance needs
+# -------------------------------------------------------------------
+VERSION   := $(shell sed -n 's/.*TC_VERSION *"\(.*\)"/\1/p' include/tc.h)
+OS        := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+DIST_KIT  := README.md LICENSE NOTICE etc/config.ini.example \
+             $(wildcard etc/agents/*.ini.example) include/tc_plugin.h plugins/_template.c
+
+dist:
+	@test -f $(MUSL_BIN) -o -f $(COSMO_BIN) || { echo "Build first: make musl or make cosmo"; exit 1; }
+	@mkdir -p dist
+	@for pair in "$(MUSL_BIN) $(OS)-$(ARCH)" "$(COSMO_BIN) cosmo-x86_64"; do \
+		set -- $$pair; [ -f "$$1" ] || continue; \
+		name=shclaw-$(VERSION)-$$2; rm -rf "dist/$$name"; mkdir -p "dist/$$name"; \
+		tar -cf - $(DIST_KIT) | tar -xf - -C "dist/$$name"; \
+		cp "$$1" "dist/$$name/shclaw"; \
+		tar -C dist -czf "dist/$$name.tar.gz" "$$name" && rm -rf "dist/$$name"; \
+		echo "==> dist/$$name.tar.gz"; \
+	done
 
 # -------------------------------------------------------------------
 # Install (creates instance directory structure at PREFIX)

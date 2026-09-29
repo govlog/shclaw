@@ -4,6 +4,7 @@
  */
 
 #include "../include/tc.h"
+#include <netinet/in.h>
 
 static int failures;
 
@@ -301,7 +302,7 @@ static void check_exec(void) {
     char out[TC_BUF_XL];
     int64_t t0 = now_ms();
     /* Output past the cap must not stop the timeout from firing */
-    tool_exec_cmd("head -c 50000 /dev/zero | tr '\\0' x; sleep 20", 1, out, sizeof(out));
+    tool_exec_cmd("dd if=/dev/zero bs=50000 count=1 2>/dev/null | tr '\\0' x; sleep 20", 1, out, sizeof(out));
     CHECK(now_ms() - t0 < 5000, "timeout not enforced after the output cap");
     CHECK(strstr(out, "[output truncated") && strstr(out, "[TIMEOUT"),
           "missing notes: %s", out + strlen(out) - 80);
@@ -335,12 +336,30 @@ static void check_plugins(const char *tmp) {
     write_plugin(dir, "builtin.c", "exec", "return in;");
     write_plugin(dir, "twin1.c", "twin", "return in;");   /* one name, two files */
     write_plugin(dir, "twin2.c", "twin", "return in;");
+    /* Code for which TinyCC calls its own helpers: memset, memmove,
+     * divisions and 64-bit arithmetic (32-bit CPUs), unsigned 64-bit <->
+     * floating conversions */
+    write_plugin(dir, "math.c", "math",
+                 "char z[64] = {0}; struct { int n; char s[40]; } a = {7, \"x\"}, b = a;"
+                 " int v = tc_atoi(in) + 1234567; long long w = (long long)v * 1000003;"
+                 " static char o[200];"
+                 " tc_snprintf(o, sizeof(o), \"%d %d %lld %lld %.3f %lld %llu %.0f %d%s%s\","
+                 " v / 10, v % 10, w / 97, w % 97, v / 3.0, (long long)(v / 3.0 * 1000),"
+                 " (unsigned long long)(v * 10000.0), (double)(unsigned long long)w,"
+                 " b.n, b.s, z); return o;");
+    /* A plugin's HTTP call, with a redirect */
+    int port;
+    pid_t srv = http_server(2, &port);
+    char fetch[160];
+    snprintf(fetch, sizeof(fetch), "static char o[256];"
+             " tc_http_get(\"http://127.0.0.1:%d/a\", o, sizeof(o)); return o;", port);
+    write_plugin(dir, "fetch.c", "fetch", fetch);
     plugin_init(&r, dir);   /* compiles everything in dir */
 
     cJSON *schemas = plugin_get_schemas(&r);
     int n = cJSON_GetArraySize(schemas);
     cJSON_Delete(schemas);
-    CHECK(n == 3, "expected alias, crash and one twin to load, got %d", n);
+    CHECK(n == 5, "expected alias, crash, fetch, math and one twin to load, got %d", n);
 
     const char *res = plugin_execute(&r, "alias", NULL, 0, out, sizeof(out));
     CHECK(res && !strcmp(res, "hi"), "libc name alias plugin returned '%s'",
@@ -348,6 +367,14 @@ static void check_plugins(const char *tmp) {
     res = plugin_execute(&r, "crash", NULL, 0, out, sizeof(out));
     CHECK(res && strstr(res, "crashed"), "plugin crash not contained: '%s'",
           res ? res : "(null)");
+    res = plugin_execute(&r, "fetch", NULL, 0, out, sizeof(out));
+    CHECK(res && !strcmp(res, "GET /b?x=1 HTTP/1.1"), "plugin HTTP call: '%s'",
+          res ? res : "(null)");
+    if (srv > 0) waitpid(srv, NULL, 0);
+    res = plugin_execute(&r, "math", NULL, 0, out, sizeof(out));
+    CHECK(res && !strcmp(res, "123456 7 12727533027 82 411522.333 411522333 "
+                              "12345670000 1234570703701 7x"),
+          "compiler helpers in plugins: '%s'", res ? res : "(null)");
 
     char path[4200];
     snprintf(path, sizeof(path), "%s/bad.c", dir);
