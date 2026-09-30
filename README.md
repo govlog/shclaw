@@ -80,6 +80,16 @@ An instance is a directory with `etc/config.ini` and one file per agent in `etc/
 data_dir = ./data
 log_dir  = ./logs
 
+[provider.openai]
+type             = openai
+api_key          = sk-YOUR-KEY-HERE
+reasoning_effort = none   ; gpt-6-* accept function tools only with none
+
+[provider.deepseek]
+type     = openai
+base_url = https://api.deepseek.com
+api_key  = sk-YOUR-KEY-HERE
+
 [provider.anthropic]
 type    = anthropic
 api_key = sk-ant-api03-YOUR-KEY-HERE
@@ -91,8 +101,8 @@ api_key  =
 timeout  = 900      ; seconds of silence allowed (slow local models)
 
 [tiers]
-simple   = anthropic/claude-haiku-4-5
-standard = anthropic/claude-sonnet-5-5
+simple   = openai/gpt-6-luna
+standard = deepseek/deepseek-flash
 complex  = anthropic/claude-opus-5-5
 local    = ollama/qwen3.5:9b
 
