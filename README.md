@@ -23,7 +23,7 @@
 
 <br>
 
-shclaw runs a team of AI agents from one static binary under 1 MB. The agents run on any model that calls tools: Claude, GPT-6, DeepSeek, or a local one through Ollama. They live on IRC, schedule their own tasks, remember things between sessions, and write their own tools in C.
+shclaw runs a team of AI agents from one static binary under 1 MB. The agents run on any model that calls tools: Claude, GPT-6, DeepSeek, or any OpenAI- or Anthropic-compatible endpoint (Ollama, llama.cpp...). They live on IRC, schedule their own tasks, remember things between sessions, and write their own tools in C.
 
 - **Static binaries, many systems.** The [Cosmopolitan](https://justine.lol/cosmopolitan/) build is one file for Linux, FreeBSD and NetBSD. The musl build is a static Linux binary for 64-bit and 32-bit PCs and ARM boards; OpenBSD gets a native static build.
 - **Tools written at runtime.** An agent writes a C plugin; the embedded [TinyCC](https://bellard.org/tcc/) compiles it in memory and every agent can call it at once.
@@ -137,6 +137,7 @@ Optional keys:
 
 | Section | Key | Default | Meaning |
 |---------|-----|---------|---------|
+| `[provider.*]` | `base_url` | the official API | Any compatible server, for `type = openai` (`/v1/chat/completions`) or `type = anthropic` (`/v1/messages`), with or without `/v1`. Prompt caching parameters only go to the official APIs |
 | `[provider.*]` | `max_tokens` | 16000 (official APIs), 4096 (others) | Output limit per model call |
 | `[provider.*]` | `timeout` | 600 | Seconds without data before a model call fails |
 | `[provider.*]` | `reasoning_effort` | not sent | Sent as is to OpenAI-compatible APIs. `gpt-6-*` models need `none`: without it, they refuse function tools |
