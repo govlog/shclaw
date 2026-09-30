@@ -184,13 +184,14 @@ static void check_conversation(const char *tmp) {
     static session_store_t sessions;
     static chat_log_t chat;
     test_agent(&a, &sessions, "talker", tmp, port);
-    chat_init(&chat, 1);               /* 1 s of silence closes it */
+    chat_init(&chat, 3);               /* 3 s of silence closes it: time()
+                                          counts whole seconds, 1 s was flaky */
     a.chat = &chat;
 
     agent_run_session(&a, TRIG_IRC, "weather in Paris?", "c1");
     chat_add(&chat, "builder", "builder", "plugin meteo created");
     agent_run_session(&a, TRIG_IRC, "and in Grenoble?", "c2");
-    sleep(2);
+    sleep(4);
     agent_run_session(&a, TRIG_IRC, "hello again", "c3");
     waitpid(srv, NULL, 0);
 

@@ -4,6 +4,7 @@
 #   ./vendor.sh            BearSSL, TinyCC, cJSON
 #   ./vendor.sh cosmo      + cosmocc toolchain
 #   ./vendor.sh smolbsd    + smolBSD
+#   ./vendor.sh musl       + musl sources (make musl LIBC=vendor)
 #
 # Every source is pinned (commit or checksum). To bump one, change its pin
 # below, delete vendor/<name> and rebuild.
@@ -18,6 +19,11 @@ CJSON_H_SHA256=25b0145150d500498e4d209cec69c18c42cf818bffcc54690be3b895a2a16dee
 COSMOCC_VER=4.0.2
 COSMOCC_SHA256=85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44
 SMOLBSD_REV=6fbba69c4bb823aba5667227a1935cd5f66c0818   # 2026-09-24
+# musl release plus the upstream fixes Alpine 3.24 applies to it
+MUSL_VER=1.2.6
+MUSL_SHA256=d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a
+MUSL_PATCHES="CVE-2026-6042.patch:1d0be2e72b9d5bd16546b923aa8af861d271322f01644716a81823bec4065c99
+CVE-2026-40200.patch:1ee29f64f9ca8e8ad7c349779d661ff6b52126a27575d3586981357a52c406fb"
 
 VENDOR="$(dirname "$0")/vendor"
 mkdir -p "$VENDOR"
@@ -86,6 +92,27 @@ fi
 
 if [ "$1" = "smolbsd" ]; then
     git_pinned "$VENDOR/smolbsd" https://github.com/NetBSDfr/smolBSD.git "$SMOLBSD_REV"
+fi
+
+if [ "$1" = "musl" ]; then
+    if [ -f "$VENDOR/musl/configure" ]; then
+        echo "musl: already present"
+    else
+        echo "Fetching musl $MUSL_VER..."
+        rm -rf "$VENDOR/musl.tmp" && mkdir -p "$VENDOR/musl.tmp"
+        cd "$VENDOR/musl.tmp"
+        curl -fsSLO "https://musl.libc.org/releases/musl-$MUSL_VER.tar.gz"
+        check_sha256 "musl-$MUSL_VER.tar.gz" "$MUSL_SHA256"
+        tar -xzf "musl-$MUSL_VER.tar.gz"
+        for p in $MUSL_PATCHES; do
+            curl -fsSLO "https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.24-stable/main/musl/${p%%:*}"
+            check_sha256 "${p%%:*}" "${p#*:}"
+            patch -d "musl-$MUSL_VER" -p1 -s < "${p%%:*}"
+        done
+        cd - >/dev/null
+        mv "$VENDOR/musl.tmp/musl-$MUSL_VER" "$VENDOR/musl"
+        rm -rf "$VENDOR/musl.tmp"
+    fi
 fi
 
 echo "Done. Run 'make' to build."

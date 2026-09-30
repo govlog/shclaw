@@ -4,8 +4,8 @@
 # and a multi-agent agentic loop.
 #
 #   make              Show help
-#   make musl         Build static Linux binary (~530K)
-#   make cosmo        Build cross-platform APE binary (~970K)
+#   make musl         Build static Linux binary (~430K, LIBC=vendor: ~390K)
+#   make cosmo        Build cross-platform APE binary (~710K)
 #   make check        Run the behaviour checks (check-cosmo: with cosmocc)
 #   make install      Install to PREFIX (creates instance directory structure)
 #   make docker-image Build Docker image from pre-compiled binary
@@ -18,42 +18,87 @@ PREFIX   = /opt/shclaw
 # Architecture detection (for musl build)
 # -------------------------------------------------------------------
 ARCH    := $(shell uname -m)
+UNAME_S := $(shell uname -s)
+X86     := $(filter x86_64 i686 i386,$(ARCH))
 
-CF_PROT := $(if $(filter x86_64 i686 i386,$(ARCH)),-fcf-protection,)
 # TinyCC keeps the i386 stack 4-byte aligned, gcc code expects 16 bytes
 # (SSE): the functions that plugins call must realign it on entry
 REALIGN := $(if $(filter i686 i386,$(ARCH)),-mstackrealign,)
 # NetBSD (PaX MPROTECT) never lets written pages become executable: TinyCC
 # maps its code from a temporary file twice instead, RX and RW
-TCC_DEFS := $(if $(filter NetBSD,$(shell uname -s)),-DCONFIG_SELINUX,)
+TCC_DEFS := $(if $(filter NetBSD,$(UNAME_S)),-DCONFIG_SELINUX,)
+# NetBSD's linker aligns segments on 2M pages: the file grew to 4.3M of padding
+comma := ,
+PAGE_LD := $(if $(filter NetBSD,$(UNAME_S)),-Wl$(comma)-z$(comma)max-page-size=0x1000,)
 # Extra TinyCC configure options, e.g. TCC_CONF=--cpu=armv6l for ARMv6
 # plugin code when building on a newer ARM CPU
 TCC_CONF ?=
+# Plugins never run with tcc -run, -bt or -b: no backtrace or bounds checker
+TCC_SLIM := --config-backtrace=no --config-bcheck=no
 
-ifeq ($(filter x86_64 aarch64 i686 i386,$(ARCH)),)
-  STATIC := -static
-  PIE    :=
+# -------------------------------------------------------------------
+# Size or hardening
+# -------------------------------------------------------------------
+# By default the binaries are as small as possible, without the exploit
+# mitigations that cost code. This agent is already a security hole by
+# design: remote code execution is a feature (the builder compiles and runs
+# what a model writes, and a plugin can open a remote shell) ;D
+# SECURE=1 builds them back: stack protector, stack clash probes, FORTIFY,
+# CET, static-PIE, RELRO, separate code pages, Cosmopolitan's full runtime.
+# Run make clean when switching: the vendor builds do not track it.
+ifeq ($(SECURE),1)
+  CF_PROT   := $(if $(X86),-fcf-protection,)
+  HARDEN     = -fstack-protector-strong -fstack-clash-protection -D_FORTIFY_SOURCE=2 $(CF_PROT)
+  HARDEN_LD := -Wl,-z,relro,-z,now -Wl,-z,separate-code
+  STRIP_SH  :=
+  STATIC    := -static-pie
+  PIE       := -fPIE
+  # Packed relative relocations (DT_RELR): 11K less on x86_64, musl 1.2.4+
+  RELR      := $(if $(filter x86_64 aarch64 i686 i386,$(ARCH)),-Wl$(comma)-z$(comma)pack-relative-relocs,)
 else
-  STATIC := -static-pie
-  PIE    := -fPIE
+  # Also turns off what distribution compilers enable by default, and
+  # OpenBSD's return address protector
+  CF_PROT   := $(if $(X86),-fcf-protection=none,)
+  HARDEN     = -fno-stack-protector -fno-stack-clash-protection -U_FORTIFY_SOURCE $(CF_PROT) \
+               $(if $(filter OpenBSD,$(UNAME_S)),-fno-ret-protector,)
+  # The BSD libcs carry unwind tables (160K on FreeBSD): plain C that never
+  # unwinds (no pthread_cancel, no backtraces) does not need them
+  HARDEN_LD := -Wl,-z,norelro -Wl,-z,noseparate-code -Wl,--build-id=none \
+               -Wl,--no-eh-frame-hdr -Wl,-T,build/no-eh-frame.ld
+  # GNU strip 2.41+ also drops the section headers (1K): the BSDs cannot
+  STRIP_SH  := --strip-section-headers
+  STATIC    := -static -no-pie
+  PIE       := -fno-pie
 endif
 
 # -------------------------------------------------------------------
 # musl toolchain
 # -------------------------------------------------------------------
 MUSL_CC      = musl-gcc
-# Function/data sections + --gc-sections drop unused code (~25K smaller)
-SECTIONS     = -ffunction-sections -fdata-sections
-MUSL_CFLAGS  = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
+# Size: -Oz (gcc 12+, clang), no debug info, no unwind tables (plain C, no
+# backtraces or pthread_cancel), one section per function or object so that
+# the linker drops what nothing uses, link-time optimization, symbols stripped
+OPT         ?= -Oz
+SIZEOPT      = -g0 -fno-asynchronous-unwind-tables -fno-unwind-tables -ffunction-sections -fdata-sections
+# The vendor archives hold LTO objects: gcc-ar indexes them
+LTO         ?= -flto=auto
+LTO_AR      ?= gcc-ar
+# LIBC=vendor: musl built here from pinned sources (./vendor.sh musl) with
+# the flags above instead of the system's musl-gcc, 35K less on x86_64.
+# LIBC_CC is the compiler that builds it: one command, no options
+MUSL_ROOT    = $(CURDIR)/vendor/musl/root
+LIBC_CC     ?= gcc
+ifeq ($(LIBC),vendor)
+  MUSL_CC    = $(MUSL_ROOT)/bin/musl-gcc
+  LIBC_DEP   = $(MUSL_ROOT)/lib/libc.a
+endif
+MUSL_CFLAGS  = -std=gnu11 $(OPT) $(SIZEOPT) $(LTO) -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
                -I include \
                -I vendor/bearssl/inc \
                -I vendor/tcc \
                -I vendor/cjson \
-               -fstack-protector-strong \
-               -fstack-clash-protection \
-               -D_FORTIFY_SOURCE=2 \
+               $(HARDEN) \
                $(PIE) \
-               $(CF_PROT) \
                $(REALIGN) \
                -fno-delete-null-pointer-checks \
                -fno-strict-overflow \
@@ -61,10 +106,9 @@ MUSL_CFLAGS  = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra -Wno-unused-parameter -W
                -Wformat=2 -Wformat-security \
                -Wimplicit-fallthrough \
                $(EXTRA_CFLAGS)
-MUSL_LDFLAGS = $(STATIC) -Wl,--gc-sections -L vendor/bearssl/build -L vendor/tcc \
-               -Wl,-z,relro,-z,now \
-               -Wl,-z,noexecstack \
-               -Wl,-z,separate-code
+MUSL_LDFLAGS = $(STATIC) $(RELR) -Wl,--gc-sections $(PAGE_LD) -L vendor/bearssl/build -L vendor/tcc \
+               $(HARDEN_LD) \
+               -Wl,-z,noexecstack
 MUSL_LIBS    = -lbearssl -ltcc -lpthread -lm
 MUSL_BIN     = shclaw
 
@@ -74,7 +118,12 @@ MUSL_BIN     = shclaw
 COSMO_DIR    = ./vendor/cosmo
 COSMO_CC     = $(COSMO_DIR)/bin/x86_64-unknown-cosmo-cc
 COSMO_AR     = $(COSMO_DIR)/bin/x86_64-unknown-cosmo-ar
-COSMO_CFLAGS = -std=gnu11 -Os $(SECTIONS) -Wall -Wextra \
+# -mtiny: Cosmopolitan's runtime built for size (-217K). It drops --strace
+# and --ftrace, malloc's cookies and some checks of API misuse
+COSMO_MODE   = $(if $(filter 1,$(SECURE)),,-mtiny)
+# -Oz makes it 12K bigger than -Os
+COSMO_OPT   ?= -Os
+COSMO_CFLAGS = -std=gnu11 $(COSMO_OPT) $(SIZEOPT) $(COSMO_MODE) -Wall -Wextra \
                -Wno-unused-parameter -Wno-format-truncation \
                -Wno-missing-field-initializers \
                -I include \
@@ -108,8 +157,10 @@ TCC_A     = vendor/tcc/libtcc.a
 help:
 	@echo "shclaw — bare metal multi-agent AI daemon"
 	@echo ""
-	@echo "  make musl           Build static Linux binary (~530K)"
-	@echo "  make cosmo          Build multi-platform binary (~970K)"
+	@echo "  make musl           Build static Linux binary (~430K)"
+	@echo "                      LIBC=vendor: with musl built from pinned sources (~390K)"
+	@echo "                      SECURE=1: with the exploit mitigations (bigger)"
+	@echo "  make cosmo          Build multi-platform binary (~710K)"
 	@echo "                      Runs on Linux/FreeBSD/NetBSD (x86_64); OpenBSD: make native"
 	@echo "  make native         Build static binary with cc (Free/Net/OpenBSD, run with gmake)"
 	@echo "  make check          Run tests/check.c (check-cosmo, check-native: other toolchains)"
@@ -145,20 +196,42 @@ $(COSMO_DIR)/bin/cosmocc:
 # -------------------------------------------------------------------
 # Vendor: build libraries (musl)
 # -------------------------------------------------------------------
-vendor/bearssl/build/libbearssl.a.musl: vendor/bearssl/Makefile
+vendor/bearssl/build/libbearssl.a.musl: vendor/bearssl/Makefile $(LIBC_DEP)
 	@# Clean cosmo-built libs if switching toolchains
 	@rm -f vendor/bearssl/build/libbearssl.a.cosmo
 	$(MAKE) -C vendor/bearssl clean 2>/dev/null || true
-	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) CFLAGS="-fPIC -Os $(SECTIONS)" -j$$(getconf _NPROCESSORS_ONLN)
+	$(MAKE) -C vendor/bearssl CC=$(MUSL_CC) AR=$(LTO_AR) CFLAGS="$(OPT) $(SIZEOPT) $(LTO) $(HARDEN) $(PIE)" \
+		DLL=no TOOLS=no TESTS=no -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
-vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile
+vendor/tcc/libtcc.a.musl: vendor/tcc/Makefile $(LIBC_DEP)
 	@rm -f vendor/tcc/libtcc.a.cosmo
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
-	cd vendor/tcc && ./configure --cc=$(MUSL_CC) $(TCC_CONF)
-	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) \
-		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 $(TCC_DEFS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
+	cd vendor/tcc && ./configure --cc=$(MUSL_CC) $(TCC_SLIM) $(TCC_CONF)
+	$(MAKE) -C vendor/tcc libtcc.a CC=$(MUSL_CC) AR=$(LTO_AR) \
+		CFLAGS="-Wall $(OPT) $(SIZEOPT) $(LTO) $(HARDEN) $(PIE) -DCONFIG_RUNMEM_RO=1 $(TCC_DEFS) -Wdeclaration-after-statement -Wno-unused-result" -j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
+
+# musl for LIBC=vendor
+vendor/musl/configure:
+	./vendor.sh musl
+
+$(MUSL_ROOT)/lib/libc.a: vendor/musl/configure
+	cd vendor/musl && CC="$(LIBC_CC)" CFLAGS="$(OPT) $(HARDEN)" ./configure \
+		--prefix=$(MUSL_ROOT) --disable-shared --enable-wrapper=gcc
+	$(MAKE) -C vendor/musl -j$$(getconf _NPROCESSORS_ONLN)
+	$(MAKE) -C vendor/musl install
+	@# The wrapper only knows dynamic and plain static links: add static-PIE.
+	@# Links without -static (TinyCC's c2str) also get libc.a, outside the
+	@# group that -static adds: libc after libgcc (ARM's __aeabi_ldiv0 calls raise)
+	sed -i -e 's|%{!shared: \([^ ]*\)/Scrt1.o}|%{shared:;static-pie:\1/rcrt1.o; :\1/Scrt1.o}|' \
+		-e 's|%{static:-static}|& %{static-pie:-static -pie --no-dynamic-linker}|' \
+		-e 's|^libgcc.a%s %:if-exists(libgcc_eh.a%s)$$|& -lc|' \
+		$(MUSL_ROOT)/lib/musl-gcc.specs
+	@# Alpine's gcc always links -lssp_nonshared (libc.a has what it holds)
+	@# and, on riscv64, -latomic: take the compiler's own
+	printf '!<arch>\n' > $(MUSL_ROOT)/lib/libssp_nonshared.a
+	f=$$($(LIBC_CC) -print-file-name=libatomic.a); [ "$$f" = libatomic.a ] || cp "$$f" $(MUSL_ROOT)/lib/
 
 # -------------------------------------------------------------------
 # Vendor: build libraries (cosmo)
@@ -175,7 +248,7 @@ vendor/bearssl/build/libbearssl.a.cosmo: vendor/bearssl/Makefile $(COSMO_DIR)/bi
 	$(MAKE) -C vendor/bearssl \
 		CC="$(abspath $(COSMO_CC))" \
 		AR="$(abspath $(COSMO_AR))" \
-		CFLAGS="-Os $(SECTIONS)" \
+		CFLAGS="$(COSMO_OPT) $(SIZEOPT)" \
 		DLL=no TOOLS=no TESTS=no \
 		-j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
@@ -183,11 +256,11 @@ vendor/bearssl/build/libbearssl.a.cosmo: vendor/bearssl/Makefile $(COSMO_DIR)/bi
 vendor/tcc/libtcc.a.cosmo: vendor/tcc/.cosmo-patched $(COSMO_DIR)/bin/cosmocc
 	@rm -f vendor/tcc/libtcc.a.musl
 	$(MAKE) -C vendor/tcc clean 2>/dev/null || true
-	cd vendor/tcc && ./configure --cc="$(abspath $(COSMO_CC))"
+	cd vendor/tcc && ./configure --cc="$(abspath $(COSMO_CC))" $(TCC_SLIM)
 	$(MAKE) -C vendor/tcc libtcc.a \
 		CC="$(abspath $(COSMO_CC))" \
 		AR="$(abspath $(COSMO_AR))" \
-		CFLAGS="-Wall -Os $(SECTIONS) -DCONFIG_RUNMEM_RO=1 -Wdeclaration-after-statement -Wno-unused-result" \
+		CFLAGS="-Wall $(COSMO_OPT) $(SIZEOPT) -DCONFIG_RUNMEM_RO=1 -Wdeclaration-after-statement -Wno-unused-result" \
 		-j$$(getconf _NPROCESSORS_ONLN)
 	@touch $@
 
@@ -196,24 +269,33 @@ vendor/tcc/libtcc.a.cosmo: vendor/tcc/.cosmo-patched $(COSMO_DIR)/bin/cosmocc
 # -------------------------------------------------------------------
 musl: $(MUSL_BIN)
 
-$(MUSL_BIN): $(MUSL_OBJS) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.musl
+$(MUSL_BIN): $(MUSL_OBJS) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.musl build/no-eh-frame.ld
 	$(MUSL_CC) $(MUSL_CFLAGS) $(MUSL_LDFLAGS) -o $@ $(MUSL_OBJS) $(MUSL_LIBS)
-	strip -s $@
+	strip -s -R .comment $(STRIP_SH) $@ 2>/dev/null || strip -s -R .comment $@
 	@echo "==> Built $(MUSL_BIN) ($$(du -h $(MUSL_BIN) | cut -f1))"
 
-build/%.o: src/%.c include/tc.h include/prompt.h vendor/cjson/cJSON.c | build
+build/%.o: src/%.c include/tc.h include/prompt.h vendor/cjson/cJSON.c | build $(LIBC_DEP)
 	$(MUSL_CC) $(MUSL_CFLAGS) -c -o $@ $<
 
-build/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h | build
+build/cJSON.o: vendor/cjson/cJSON.c vendor/cjson/cJSON.h | build $(LIBC_DEP)
 	$(MUSL_CC) $(MUSL_CFLAGS) -c -o $@ $<
 
 build:
 	mkdir -p build
 
-# FreeBSD/NetBSD/OpenBSD: the musl build with the system compiler, plain
-# -static (their compilers ignore -static-pie and would link libbearssl.so)
-# and no -fcf-protection (clang rejects it on OpenBSD/i386)
-NATIVE = MUSL_CC=cc STATIC=-static PIE= CF_PROT=
+build/no-eh-frame.ld: | build
+	@# NetBSD's crtbeginT.o registers the table: its part and crtend's end stay
+	echo 'SECTIONS { /DISCARD/ : { EXCLUDE_FILE(*crtbegin*.o *crtend*.o) *(.eh_frame) } } INSERT AFTER .text;' > $@
+
+# FreeBSD/NetBSD/OpenBSD: the musl build with the system compiler, no
+# -fcf-protection either way (clang rejects it on OpenBSD/i386, OpenBSD/amd64
+# enforces IBT) and with SECURE=1 plain -static (their compilers ignore
+# -static-pie). FreeBSD's and OpenBSD's ar are llvm-ar: LTO works there
+NATIVE = MUSL_CC=cc CF_PROT= LTO_AR=ar $(NATIVE_$(UNAME_S)) \
+         $(if $(filter 1,$(SECURE)),STATIC=-static PIE= RELR=)
+NATIVE_FreeBSD = LTO=-flto
+NATIVE_NetBSD  = LTO= OPT=-Os
+NATIVE_OpenBSD = LTO=-flto
 
 native:
 	$(MAKE) musl $(NATIVE)
@@ -249,7 +331,7 @@ build-cosmo:
 CHECK_MUSL  = $(filter-out build/main.o build/daemon.o,$(MUSL_OBJS))
 CHECK_COSMO = $(filter-out build-cosmo/main.o build-cosmo/daemon.o,$(COSMO_OBJS))
 
-check: $(CHECK_MUSL) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.musl
+check: $(CHECK_MUSL) vendor/bearssl/build/libbearssl.a.musl vendor/tcc/libtcc.a.musl build/no-eh-frame.ld
 	$(MUSL_CC) $(MUSL_CFLAGS) $(MUSL_LDFLAGS) -o build/check tests/check.c $(CHECK_MUSL) $(MUSL_LIBS)
 	./build/check
 
@@ -380,3 +462,5 @@ clean:
 	rm -f vendor/tcc/.cosmo-patched
 	rm -f vendor/bearssl/build/libbearssl.a.musl vendor/bearssl/build/libbearssl.a.cosmo
 	rm -f vendor/tcc/libtcc.a.musl vendor/tcc/libtcc.a.cosmo
+	rm -rf $(MUSL_ROOT)
+	$(MAKE) -C vendor/musl clean 2>/dev/null || true

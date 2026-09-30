@@ -7,8 +7,8 @@
 
 ![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![musl](https://img.shields.io/badge/musl-540K-blue?style=flat-square)
-![cosmo](https://img.shields.io/badge/cosmo-970K-blue?style=flat-square)
+![musl](https://img.shields.io/badge/musl-390K-blue?style=flat-square)
+![cosmo](https://img.shields.io/badge/cosmo-710K-blue?style=flat-square)
 ![Lines](https://img.shields.io/badge/~7500_lines-grey?style=flat-square)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 ![FreeBSD](https://img.shields.io/badge/FreeBSD-AB2B28?style=flat-square&logo=freebsd&logoColor=white)
@@ -58,10 +58,12 @@ Real sessions on a local IRC server with `gpt-4.1-nano`, recorded and rendered b
 sudo apt install build-essential musl-tools git  # Debian/Ubuntu
 git clone https://github.com/govlog/shclaw.git && cd shclaw
 
-make musl    # static Linux binary, ~540K
-make cosmo   # one binary for Linux, FreeBSD, NetBSD (x86_64), ~970K
+make musl    # static Linux binary, ~430K (LIBC=vendor: ~390K, musl built from source)
+make cosmo   # one binary for Linux, FreeBSD, NetBSD (x86_64), ~710K
 gmake native # FreeBSD, NetBSD or OpenBSD, with the system compiler
 ```
+
+Builds are as small as possible by default, without exploit mitigations: this agent runs code that a model writes, so they would guard little. `SECURE=1` builds them back (stack protector, FORTIFY, static-PIE, RELRO...): see [Internals](doc/internals.md#builds).
 
 The first build fetches the vendored libraries at pinned revisions. Prebuilt archives for each platform are on the [Releases](https://github.com/govlog/shclaw/releases) page.
 
@@ -236,12 +238,12 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 
 | System | CPU | Build | Tested |
 |--------|-----|-------|--------|
-| Linux | x86_64 | `make musl`, `make cosmo` | checks, live agents and plugins |
-| Linux | i386 (32-bit PC) | `make musl` | checks, live agents and plugins |
-| Linux | armv6 (Pi Zero, Pi 1) | `make musl DIST_ARCH=armv6 TCC_CONF=...`, see `scripts/pipeline.sh` | checks, live agents and plugins, also on an emulated ARM1176 |
-| Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl` | checks, live agents and plugins |
-| Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl` | checks, live agents and plugins |
-| Linux | riscv64 | `make musl` | checks, live agents and plugins, under qemu |
+| Linux | x86_64 | `make musl LIBC=vendor`, `make cosmo` | checks, live agents and plugins |
+| Linux | i386 (32-bit PC) | `scripts/release-linux-i386.sh` | checks, live agents and plugins |
+| Linux | armv6 (Pi Zero, Pi 1) | `make musl LIBC=vendor DIST_ARCH=armv6 TCC_CONF=...`, see `scripts/pipeline.sh` | checks, live agents and plugins, also on an emulated ARM1176 |
+| Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl LIBC=vendor` | checks, live agents and plugins |
+| Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl LIBC=vendor` | checks, live agents and plugins |
+| Linux | riscv64 | `make musl LIBC=vendor` | checks, live agents and plugins, under qemu |
 | FreeBSD 15.1 | x86_64 | `make cosmo`, `gmake native` | checks, live agents and plugins |
 | FreeBSD 14.5 | i386 | `gmake native` | checks, live agents and plugins |
 | NetBSD 10.2, 11.99 (smolBSD) | x86_64 | `make cosmo`, `gmake native` (10.2) | checks, live agents and plugins |
@@ -250,7 +252,7 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 
 Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. The FreeBSD i386 binary also runs on FreeBSD 15 amd64, through its 32-bit support.
 
-Release archives come from `make dist`. The Linux i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, for the i586 (no cmov, SSE or MMX), so the binary runs on any 32-bit PC from the Pentium and the AMD K6 on.
+Release archives come from `make dist`. The Linux ones link the pinned musl built from source (`LIBC=vendor`). The i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, for the i586 (no cmov, SSE or MMX), so the binary runs on any 32-bit PC from the Pentium and the AMD K6 on.
 
 ---
 
@@ -261,7 +263,7 @@ make check         # tests/check.c: HTTP, IRC, plugins, prompts, dates, tool arg
 make check-cosmo   # the same checks, built with cosmocc
 ```
 
-`scripts/pipeline.sh` builds, checks and packages every platform of the table above from one git revision: locally, in Docker, on a Raspberry Pi over SSH and in BSD VMs, one at a time. `--live` adds a smoke test with a real model. Its settings go in `scripts/pipeline.conf` (see `scripts/pipeline.conf.example`).
+`scripts/pipeline.sh` builds, checks and packages every platform of the table above from one git revision: locally, in Docker, on a Raspberry Pi over SSH and in BSD VMs, one at a time. `--live` adds a smoke test with a real model; `--most-secure` builds the hardened variant (`SECURE=1`) instead of the smallest one. Its settings go in `scripts/pipeline.conf` (see `scripts/pipeline.conf.example`).
 
 - [Plugin API](doc/plugin-api.md): writing plugins, the `tc_*` functions
 - [Internals](doc/internals.md): event loop, harness, prompt caching, plugin compilation, builds

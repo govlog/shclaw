@@ -27,6 +27,7 @@ vendor/tcc/
 vendor/cjson/
 vendor/cosmo/
 vendor/smolbsd/
+vendor/musl/
 vendor/*.tmp/
 
 # Docker/smolBSD build copies

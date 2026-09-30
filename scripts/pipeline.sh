@@ -3,13 +3,17 @@
 # we test, from one git revision, then write a report.
 #
 #   scripts/pipeline.sh [--rev REV] [--only t1,t2] [--live] [--list]
+#                       [--most-small | --most-secure]
 #
-#   --rev   git revision to build (default: HEAD); uncommitted changes are ignored
-#   --only  comma-separated targets (default: all, see --list)
-#   --live  also run the live smoke test (needs an OpenAI key, see LIVE_DIR)
+#   --rev          git revision to build (default: HEAD); uncommitted changes are ignored
+#   --only         comma-separated targets (default: all, see --list)
+#   --live         also run the live smoke test (needs an OpenAI key, see LIVE_DIR)
+#   --most-small   smallest binaries, no exploit mitigations (default)
+#   --most-secure  hardened binaries (make SECURE=1, see the Makefile)
 #
 # Host specifics come from scripts/pipeline.conf (copy pipeline.conf.example).
-# Output: <OUT>/<version>/ with the archives, SHA256SUMS, report.md and logs/.
+# Output: <OUT>/<version>/ (<version>-secure with --most-secure) with the
+# archives, SHA256SUMS, report.md and logs/.
 # Targets run one after the other: one VM at a time, never a Docker build
 # while a VM runs. The laptop ran out of memory once, and i386 guests stall
 # the host with split-locked atomics, so qemu runs niced, i386 guests on 1 CPU.
@@ -22,14 +26,16 @@ openbsd-amd64 openbsd-i386 freebsd-amd64 freebsd-i386 netbsd-amd64 netbsd-i386
 cosmo-on-freebsd freebsd-i386-on-amd64 cosmo-on-netbsd"
 # The last three ship nothing: they run binaries built by other targets
 
-REV=HEAD ONLY="" LIVE=0
+REV=HEAD ONLY="" LIVE=0 MK="" SUFFIX=""
 while [ $# -gt 0 ]; do
     case $1 in
         --rev) REV=$2; shift ;;
         --only) ONLY=$2; shift ;;
         --live) LIVE=1 ;;
+        --most-small) MK="" SUFFIX="" ;;
+        --most-secure) MK="SECURE=1" SUFFIX="-secure" ;;
         --list) echo $TARGETS; exit 0 ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -44,7 +50,7 @@ fi
 COMMIT=$(git rev-parse --verify "$REV^{commit}") || exit 2
 VERSION=$(git show "$COMMIT:include/tc.h" | sed -n 's/.*TC_VERSION *"\(.*\)".*/\1/p')
 [ -n "$VERSION" ] || { echo "no TC_VERSION at $REV" >&2; exit 2; }
-OUTV=$OUT/$VERSION
+OUTV=$OUT/$VERSION$SUFFIX
 WORK=$OUTV/work
 BUNDLE=$WORK/bundle.tar
 [ -z "$ONLY" ] && rm -rf "${OUTV:?}"
@@ -68,20 +74,20 @@ make_bundle() {
     local key cache b=$WORK/bundle
     key=$(git show "$COMMIT:vendor.sh" | sha256sum | cut -c1-12)
     cache=$OUT/vendor-cache/$key
-    if [ ! -f "$cache/vendor/cjson/cJSON.c" ]; then
+    if [ ! -f "$cache/vendor/musl/configure" ]; then
         rm -rf "$cache" && mkdir -p "$cache/vendor"
         git show "$COMMIT:vendor.sh" > "$cache/vendor.sh"
         # Seed the two slow clones from this checkout: vendor.sh checks their pins
         for v in bearssl tcc; do
             [ -d "$ROOT/vendor/$v/.git" ] && git clone -q "$ROOT/vendor/$v" "$cache/vendor/$v"
         done
-        if ! (cd "$cache" && sh vendor.sh); then
+        if ! (cd "$cache" && sh vendor.sh musl); then
             rm -rf "$cache/vendor" && mkdir -p "$cache/vendor"
-            (cd "$cache" && sh vendor.sh) || return 1
+            (cd "$cache" && sh vendor.sh musl) || return 1
         fi
     fi
     rm -rf "$b" && mkdir -p "$b" && git archive "$COMMIT" | tar -xf - -C "$b" &&
-        (cd "$cache" && tar --exclude=.git -cf - vendor/bearssl vendor/tcc vendor/cjson) | tar -xf - -C "$b" &&
+        (cd "$cache" && tar --exclude=.git -cf - vendor/bearssl vendor/tcc vendor/cjson vendor/musl) | tar -xf - -C "$b" &&
         tar -C "$b" -cf "$BUNDLE" . &&
         cp "$b/include/tc_plugin.h" "$WORK/tc_plugin.h" &&
         rm -rf "$b"
@@ -124,7 +130,7 @@ live() {
 
 t_linux_x86_64() {
     local d=$WORK/linux-x86_64
-    fresh "$d" && (cd "$d" && make musl && make check && make dist) &&
+    fresh "$d" && (cd "$d" && make musl LIBC=vendor $MK && make check LIBC=vendor $MK && make dist) &&
         collect "$d/dist/$(archive linux-x86_64)" &&
         live local_sh "$OUTV/$(archive linux-x86_64)" "$d/live"
 }
@@ -132,10 +138,10 @@ t_linux_x86_64() {
 t_cosmo_x86_64() {
     local d=$WORK/cosmo-x86_64 link
     fresh "$d" && ln -s "$COSMO_DIR" "$d/vendor/cosmo" &&
-        (cd "$d" && make cosmo && make check-cosmo && make dist) &&
+        (cd "$d" && make cosmo $MK && make check-cosmo $MK && make dist) &&
         collect "$d/dist/$(archive cosmo-x86_64)" || return 1
     # The checks as a binary the BSDs run: linked as .com, then assimilate -b
-    link=$(cd "$d" && make -n check-cosmo | grep -- '-o build-cosmo/check ' | sed 's|-o build-cosmo/check |-o check.com |')
+    link=$(cd "$d" && make -n check-cosmo $MK | grep -- '-o build-cosmo/check ' | sed 's|-o build-cosmo/check |-o check.com |')
     (cd "$d" && eval "$link" && vendor/cosmo/bin/assimilate -b check.com) &&
         cp "$d/check.com" "$WORK/cosmo-check.com" &&
         live local_sh "$OUTV/$(archive cosmo-x86_64)" "$d/live"
@@ -143,7 +149,7 @@ t_cosmo_x86_64() {
 
 t_linux_i386() {   # Docker: everything built for the i586, see the script
     local d=$WORK/linux-i386
-    rm -rf "$d" && scripts/release-linux-i386.sh "$BUNDLE" "$d/out" &&
+    rm -rf "$d" && env $MK scripts/release-linux-i386.sh "$BUNDLE" "$d/out" &&
         collect "$d/out/$(archive linux-i386)" &&
         live local_sh "$OUTV/$(archive linux-i386)" "$d/live"
 }
@@ -156,7 +162,7 @@ t_linux_armv7l() {
     # linux32: the armhf userland also under a 64-bit kernel (TinyCC's
     # configure reads uname -m); ARCH only names the archive
     pi_sh "rm -rf $d && mkdir -p $d && tar -xf - -C $d" < "$BUNDLE" &&
-        pi_sh "cd $d && linux32 make musl && linux32 make check && make dist ARCH=armv7l" &&
+        pi_sh "cd $d && linux32 make musl LIBC=vendor $MK && linux32 make check LIBC=vendor $MK && make dist ARCH=armv7l" &&
         pi_sh "cat $d/dist/$a" > "$WORK/$a" && collect "$WORK/$a" &&
         live pi_sh "$d/dist/$a" "$PI_DIR/live-armv7l"
 }
@@ -169,7 +175,7 @@ t_linux_armv6() {   # Pi Zero/1: in the Alpine armhf chroot, built for ARMv6
         pi_sh "mountpoint -q $r/proc || sudo mount -t proc proc $r/proc
             mountpoint -q $r/dev || sudo mount --bind /dev $r/dev
             sudo linux32 chroot $r /bin/sh -c 'command -v gcc >/dev/null || apk add --no-cache build-base >/dev/null
-                V=\"MUSL_CC=gcc DIST_ARCH=armv6\"; T=\"TCC_CONF=--cpu=armv6l --triplet=arm-linux-gnueabihf\"
+                V=\"LIBC=vendor DIST_ARCH=armv6 $MK\"; T=\"TCC_CONF=--cpu=armv6l --triplet=arm-linux-gnueabihf\"
                 cd /pipeline && make musl \$V \"\$T\" && make check \$V \"\$T\" && make dist \$V \"\$T\"'
             rc=\$?; sudo umount $r/dev $r/proc; exit \$rc" &&
         pi_sh "cat $r/pipeline/dist/$a" > "$WORK/$a" && collect "$WORK/$a" &&
@@ -185,7 +191,7 @@ t_linux_riscv64() {   # Docker under qemu-riscv64 (binfmt_misc, see pipeline.con
         docker run --rm --platform linux/riscv64 -v "$BUNDLE:/src.tar:ro" -v "$d/out:/out" alpine:3.24 sh -ec "
             apk add --no-cache build-base >/dev/null
             mkdir /build && tar -xf /src.tar -C /build && cd /build
-            make musl MUSL_CC=gcc && make check MUSL_CC=gcc && make dist MUSL_CC=gcc
+            make musl LIBC=vendor $MK && make check LIBC=vendor $MK && make dist
             cp dist/$a /out/ && chown -R $(id -u):$(id -g) /out" &&
         collect "$d/out/$a" &&
         live local_sh "$OUTV/$a" "$d/live"
@@ -198,7 +204,7 @@ t_linux_aarch64() {   # in the Alpine aarch64 chroot (sudo on the board)
         pi_sh "mountpoint -q $r/proc || sudo mount -t proc proc $r/proc
             mountpoint -q $r/dev || sudo mount --bind /dev $r/dev
             sudo chroot $r /bin/sh -c 'command -v gcc >/dev/null || apk add --no-cache build-base >/dev/null
-                cd /pipeline && make musl MUSL_CC=gcc && make check MUSL_CC=gcc && make dist MUSL_CC=gcc'
+                cd /pipeline && make musl LIBC=vendor $MK && make check LIBC=vendor $MK && make dist'
             rc=\$?; sudo umount $r/dev $r/proc; exit \$rc" &&
         pi_sh "cat $r/pipeline/dist/$a" > "$WORK/$a" && collect "$WORK/$a" &&
         live pi_sh "$r/pipeline/dist/$a" "$PI_DIR/live-aarch64"
@@ -245,7 +251,7 @@ vm_native() {   # vm_native <target>: gmake native, check-native and dist in its
     vm_start "$t" &&
         vm_sh "rm -rf $d && mkdir -p $d && tar -xf - -C $d" < "$BUNDLE" &&
         vm_sh "cd $d && PATH=/usr/local/bin:/usr/pkg/bin:\$PATH && export PATH &&
-               gmake native && gmake check-native && gmake dist" &&
+               gmake native $MK && gmake check-native $MK && gmake dist" &&
         vm_sh "cat $d/dist/$a" > "$WORK/$a" && collect "$WORK/$a" || rc=1
     if [ $rc = 0 ] && [ "$t" = freebsd-i386 ]; then   # for freebsd-i386-on-amd64
         vm_sh "cat $d/build/check" > "$WORK/freebsd-i386-check" || rc=1
@@ -322,6 +328,7 @@ done
     echo
     echo "- Revision: \`$(git rev-parse --short "$COMMIT")\` $(git log -1 --format=%s "$COMMIT")"
     echo "- Date: $(date '+%Y-%m-%d %H:%M')${ONLY:+, targets: $ONLY}"
+    echo "- Build: $([ -n "$MK" ] && echo most-secure || echo most-small)"
     echo "- Live smoke test: $([ $LIVE = 1 ] && echo yes || echo no)"
     echo "- Result: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     echo

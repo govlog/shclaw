@@ -66,11 +66,22 @@ No `.so` is ever written to disk. At startup, `plugin_scan()` compiles every `.c
 
 ## Builds
 
-**musl:** a static Linux binary, about 540K, hardened with static-PIE, RELRO, NX and a stack protector. The Makefile supports x86_64, i686, aarch64 and 32-bit ARM (plain `-static` there). On i686, the code is built with `-mstackrealign`: TinyCC keeps the stack 4-byte aligned, while gcc code expects 16 bytes for SSE, and HTTPS calls from plugins crashed.
+**musl:** a static Linux binary, about 430K. With `LIBC=vendor`, it links musl 1.2.6 built from pinned sources (`./vendor.sh musl`, with the fixes Alpine applies) instead of the system's `musl-gcc`: about 390K. The Makefile supports x86_64, i686, aarch64, 32-bit ARM and riscv64. On i686, the code is built with `-mstackrealign`: TinyCC keeps the stack 4-byte aligned, while gcc code expects 16 bytes for SSE, and HTTPS calls from plugins crashed.
 
-**Native (FreeBSD, OpenBSD):** `gmake native` runs the same build with the system compiler; `gmake check-native` runs the checks.
+**Size or hardening:** by default every binary is as small as possible. This agent is already a security hole by design: remote code execution is a feature (the builder compiles and runs what a model writes, and a plugin can open a remote shell), so exploit mitigations would guard little ;D The default build:
 
-**Cosmopolitan:** a single ELF of about 970K that runs on Linux, FreeBSD and NetBSD without emulation: the libc handles the syscall differences. It is built with `x86_64-unknown-cosmo-cc`, because TinyCC generates x86_64 code. The `assimilate -b` step turns the APE output into a plain ELF and keeps the FreeBSD brand, without which FreeBSD refuses it. OpenBSD 7.5 and later only accept system calls from the system libc (pinsyscalls), which no Cosmopolitan binary can run under. `make check-cosmo` runs the checks with this toolchain.
+- `-Oz` (`-Os` for Cosmopolitan and NetBSD's gcc 10), no debug info, no unwind tables, one section per function so that the linker drops unused code, link-time optimization (musl, FreeBSD, OpenBSD), symbols and section headers stripped;
+- TinyCC without its backtrace and bounds checker, which only `tcc -run`, `-bt` and `-b` use;
+- no stack protector, stack clash probes, FORTIFY or CET, a plain static binary (no PIE), no RELRO, code and read-only data in one segment, and the unwind tables of the BSD libcs dropped at link time (160K on FreeBSD);
+- Cosmopolitan's `-mtiny` runtime, 217K smaller, which drops `--strace`, `--ftrace`, malloc's cookies and some checks of API misuse.
+
+`SECURE=1` builds the mitigations back: `-fstack-protector-strong`, `-fstack-clash-protection`, `_FORTIFY_SOURCE=2`, `-fcf-protection` on x86, static-PIE (with packed relative relocations on x86_64, i686 and aarch64: DT_RELR, musl 1.2.4 or later), full RELRO, separate code pages and Cosmopolitan's full runtime. Run `make clean` when switching: the vendored builds do not track it.
+
+On x86_64, with `LIBC=vendor`: 393K small, 422K with `SECURE=1`; Cosmopolitan 707K and 919K.
+
+**Native (FreeBSD, NetBSD, OpenBSD):** `gmake native` runs the same build with the system compiler; `gmake check-native` runs the checks. Their static libcs weigh more than musl: FreeBSD's jemalloc alone is 73K.
+
+**Cosmopolitan:** a single ELF of about 710K that runs on Linux, FreeBSD and NetBSD without emulation: the libc handles the syscall differences. It is built with `x86_64-unknown-cosmo-cc`, because TinyCC generates x86_64 code. The `assimilate -b` step turns the APE output into a plain ELF and keeps the FreeBSD brand, without which FreeBSD refuses it. OpenBSD 7.5 and later only accept system calls from the system libc (pinsyscalls), which no Cosmopolitan binary can run under. `make check-cosmo` runs the checks with this toolchain.
 
 Two Cosmopolitan pitfalls shape the code:
 
