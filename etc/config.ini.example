@@ -25,7 +25,13 @@ type     = anthropic
 api_key  = sk-ant-CHANGEME
 
 [provider.openai]
+type             = openai
+api_key          = sk-CHANGEME
+reasoning_effort = none
+
+[provider.deepseek]
 type     = openai
+base_url = https://api.deepseek.com
 api_key  = sk-CHANGEME
 
 ; Ollama (local, no API key needed). Also start the Ollama server with a
@@ -37,9 +43,10 @@ api_key  = sk-CHANGEME
 ;timeout  = 900
 
 ; --- Model tiers ---
-; Format: provider_name/model_id
+; Format: provider_name/model_id. Keep only the providers you have a key for
+; and point every tier used by an agent at one of them.
 
 [tiers]
-simple   = anthropic/claude-haiku-4-5
-standard = anthropic/claude-sonnet-5-5
+simple   = openai/gpt-6-luna
+standard = deepseek/deepseek-flash
 complex  = anthropic/claude-opus-5-5
