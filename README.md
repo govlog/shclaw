@@ -5,6 +5,8 @@
 **Self-contained multi-agent AI orchestrator in C.**
 **Single static binary. No dependencies. No runtime.**
 
+🦀 **From a 1993 Pentium to a RISC-V board: AI agents on Linux and three BSDs, 13 builds.**
+
 ![C](https://img.shields.io/badge/C11-00599C?style=flat-square&logo=c&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![musl](https://img.shields.io/badge/musl-390K-blue?style=flat-square)
