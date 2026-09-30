@@ -23,7 +23,7 @@
 
 <br>
 
-shclaw runs a team of AI agents from one static binary under 1 MB. The agents talk to LLMs (Claude, GPT, Ollama), live on IRC, schedule their own tasks, remember things between sessions, and write their own tools in C.
+shclaw runs a team of AI agents from one static binary under 1 MB. The agents run on any model that calls tools: Claude, GPT-6, DeepSeek, or a local one through Ollama. They live on IRC, schedule their own tasks, remember things between sessions, and write their own tools in C.
 
 - **Static binaries, many systems.** The [Cosmopolitan](https://justine.lol/cosmopolitan/) build is one file for Linux, FreeBSD and NetBSD. The musl build is a static Linux binary for 64-bit and 32-bit PCs and ARM boards; OpenBSD gets a native static build.
 - **Tools written at runtime.** An agent writes a C plugin; the embedded [TinyCC](https://bellard.org/tcc/) compiles it in memory and every agent can call it at once.
