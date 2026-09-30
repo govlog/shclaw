@@ -45,6 +45,3 @@ Thumbs.db
 
 # Claude
 CLAUDE.md
-
-# Local release pipeline settings (scripts/pipeline.conf.example)
-scripts/pipeline.conf

@@ -57,7 +57,7 @@ Real sessions on a local IRC server with `gpt-4.1-nano`, recorded and rendered b
 ### Build
 
 ```bash
-sudo apt install build-essential musl-tools git  # Debian/Ubuntu
+sudo apt install build-essential musl-tools git curl  # Debian/Ubuntu
 git clone https://github.com/govlog/shclaw.git && cd shclaw
 
 make musl    # static Linux binary, ~430K (LIBC=vendor: ~390K, musl built from source)
@@ -67,7 +67,7 @@ gmake native # FreeBSD, NetBSD or OpenBSD, with the system compiler
 
 Builds are as small as possible by default, without exploit mitigations: this agent runs code that a model writes, so they would guard little. `SECURE=1` builds them back (stack protector, FORTIFY, static-PIE, RELRO...): see [Internals](doc/internals.md#builds).
 
-The first build fetches the vendored libraries at pinned revisions. Prebuilt archives for each platform are on the [Releases](https://github.com/govlog/shclaw/releases) page.
+The first build fetches the vendored libraries at pinned revisions. **[BUILD.md](BUILD.md)** gives the dependencies and commands for every system, CPU and libc. Prebuilt archives for each platform are on the [Releases](https://github.com/govlog/shclaw/releases) page.
 
 ### Configure
 
@@ -253,7 +253,7 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 |--------|-----|-------|--------|
 | Linux | x86_64 | `make musl LIBC=vendor`, `make cosmo` | checks, live agents and plugins |
 | Linux | i386 (32-bit PC) | `scripts/release-linux-i386.sh` | checks, live agents and plugins |
-| Linux | armv6 (Pi Zero, Pi 1) | `make musl LIBC=vendor DIST_ARCH=armv6 TCC_CONF=...`, see `scripts/pipeline.sh` | checks, live agents and plugins, also on an emulated ARM1176 |
+| Linux | armv6 (Pi Zero, Pi 1) | `make musl LIBC=vendor DIST_ARCH=armv6 TCC_CONF=...`, see [BUILD.md](BUILD.md#linux-armv6-pi-zero-pi-1) | checks, live agents and plugins, also on an emulated ARM1176 |
 | Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl LIBC=vendor` | checks, live agents and plugins |
 | Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl LIBC=vendor` | checks, live agents and plugins |
 | Linux | riscv64 | `make musl LIBC=vendor` | checks, live agents and plugins, under qemu |
@@ -276,8 +276,7 @@ make check         # tests/check.c: HTTP, IRC, plugins, prompts, dates, tool arg
 make check-cosmo   # the same checks, built with cosmocc
 ```
 
-`scripts/pipeline.sh` builds, checks and packages every platform of the table above from one git revision: locally, in Docker, on a Raspberry Pi over SSH and in BSD VMs, one at a time. `--live` adds a smoke test with a real model; `--most-secure` builds the hardened variant (`SECURE=1`) instead of the smallest one. Its settings go in `scripts/pipeline.conf` (see `scripts/pipeline.conf.example`).
-
+- [Build](BUILD.md): every system, CPU and libc, step by step
 - [Plugin API](doc/plugin-api.md): writing plugins, the `tc_*` functions
 - [Internals](doc/internals.md): event loop, harness, prompt caching, plugin compilation, builds
 

@@ -1,6 +1,6 @@
-# IRC screenshots
+# Screenshots
 
-The images in `doc/images/irc-*.png` are real sessions, recorded and rendered by these scripts.
+The images in `doc/images/irc-*.png` and `doc/images/build.png` are real sessions, recorded and rendered by these scripts.
 
 1. Run an IRC server on 127.0.0.1:6667, e.g. `docker run -d -p 127.0.0.1:6667:6667 inspircd/inspircd-docker`.
 2. Start an instance with the example agents and this `[irc]` section, then `./shclaw -d`:
@@ -20,3 +20,7 @@ The images in `doc/images/irc-*.png` are real sessions, recorded and rendered by
 4. Render it: `./render_irc.py builder.jsonl "govlog@shclaw — weechat — #shclaw" builder.html`,
    then `./shot.sh builder.html raw.png 2000 1600` (headless Firefox) and cut out the window:
    `convert raw.png -alpha set -fuzz 3% -fill none -draw "color 0,0 floodfill" -trim +repage out.png`.
+
+The build capture: `build.txt` is a shell session as typed and printed (lines starting with
+`$ ` are commands). `./render_term.py build.txt "me@laptop — bash — Ubuntu x86_64" build.html`,
+then the same `shot.sh` and `convert` steps.
