@@ -1,4 +1,0 @@
-[{"say": "remember that my favourite editor is vim", "quiet": 10},
- {"say": "remind me in 1 minute to stand up and stretch", "quiet": 10},
- {"until": "stretch", "max": 150},
- {"say": "what's my favourite editor again?", "quiet": 10}]

@@ -36,7 +36,7 @@ shclaw runs a team of AI agents from one static binary under 1 MB. The agents ru
 
 ## In action
 
-Real sessions on a local IRC server with `gpt-4.1-nano`, recorded and rendered by `scripts/demo/`.
+Real sessions on a local IRC server with `gpt-4.1-nano`.
 
 **Chat and delegation.** Without a mention, the hub answers; `@oracle` goes to a specialist; jarvis delegates on its own with `send_message`.
 
@@ -252,8 +252,8 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 | System | CPU | Build | Tested |
 |--------|-----|-------|--------|
 | Linux | x86_64 | `make musl LIBC=vendor`, `make cosmo` | checks, live agents and plugins |
-| Linux | i386 (32-bit PC) | `scripts/release-linux-i386.sh` | checks, live agents and plugins |
-| Linux | armv6 (Pi Zero, Pi 1) | `make musl LIBC=vendor DIST_ARCH=armv6 TCC_CONF=...`, see [BUILD.md](BUILD.md#linux-armv6-pi-zero-pi-1) | checks, live agents and plugins, also on an emulated ARM1176 |
+| Linux | i386 (32-bit PC) | `make musl LIBC=vendor`, i586 flags: see [BUILD.md](BUILD.md#linux-i386) | checks, live agents and plugins |
+| Linux | armv6 (Pi Zero, Pi 1) | `make musl LIBC=vendor` on the Pi, see [BUILD.md](BUILD.md#linux-armv6-pi-zero-pi-1) | checks, live agents and plugins, also on an emulated ARM1176 |
 | Linux | armv7l (Raspberry Pi, 32-bit OS) | `make musl LIBC=vendor` | checks, live agents and plugins |
 | Linux | aarch64 (Raspberry Pi, 64-bit kernel) | `make musl LIBC=vendor` | checks, live agents and plugins |
 | Linux | riscv64 | `make musl LIBC=vendor` | checks, live agents and plugins, under qemu |
@@ -265,7 +265,7 @@ The instance directory is shared over 9P and mounted on `/mnt`; Ctrl-A X stops t
 
 Cosmopolitan binaries cannot run on OpenBSD 7.5 and later, which only accept system calls from the system libc: use the native build there. The FreeBSD i386 binary also runs on FreeBSD 15 amd64, through its 32-bit support.
 
-Release archives come from `make dist`. The Linux ones link the pinned musl built from source (`LIBC=vendor`). The i386 one comes from `scripts/release-linux-i386.sh` (Docker): it builds everything, musl included, for the i586 (no cmov, SSE or MMX), so the binary runs on any 32-bit PC from the Pentium and the AMD K6 on.
+Release archives come from `make dist`. The Linux ones link the pinned musl built from source (`LIBC=vendor`); the i386 one is built for the i586 (no cmov, SSE or MMX), so it runs on any 32-bit PC from the Pentium and the AMD K6 on.
 
 ---
 

@@ -9,10 +9,10 @@ One `make` builds a static binary: shclaw, BearSSL, TinyCC and cJSON all compile
 | [Linux](#linux-amd64-musl-built-from-source) | amd64 | musl, built from source | `make musl LIBC=vendor` | 396K |
 | [Linux](#linux-amd64-system-musl) | amd64 | musl, the system's | `make musl` | 436K |
 | [Linux, FreeBSD, NetBSD](#linux-freebsd-netbsd-amd64-cosmopolitan) | amd64 | Cosmopolitan | `make cosmo` | 708K |
-| [Linux](#linux-i386) | i386 (Pentium and later) | musl, built from source | `scripts/release-linux-i386.sh` | 388K |
+| [Linux](#linux-i386) | i386 (Pentium and later) | musl, built from source | `make musl LIBC=vendor LIBC_CC=...` | 388K |
 | [Linux](#linux-armv7l-raspberry-pi-32-bit-os) | armv7l | musl, built from source | `make musl LIBC=vendor` | 448K |
 | [Linux](#linux-aarch64) | aarch64 | musl, built from source | `make musl LIBC=vendor` | 428K |
-| [Linux](#linux-armv6-pi-zero-pi-1) | armv6 | musl, built from source | `make musl LIBC=vendor ...` | 448K |
+| [Linux](#linux-armv6-pi-zero-pi-1) | armv6 | musl, built from source | `make musl LIBC=vendor` | 448K |
 | [Linux](#linux-riscv64) | riscv64 | musl, built from source | `make musl LIBC=vendor` | 384K |
 | [FreeBSD](#freebsd-amd64) | amd64 | FreeBSD libc | `gmake native` | 1.4M |
 | [FreeBSD](#freebsd-i386) | i386 | FreeBSD libc | `gmake native` | 1.2M |
@@ -83,19 +83,24 @@ Tested on Ubuntu 26.04, FreeBSD 15.1 and NetBSD 10.2 (checks and live agents on 
 
 ### Linux i386
 
-For any 32-bit PC from the Pentium and the AMD K6 on: musl, BearSSL, TinyCC and shclaw all compiled for the i586 (no cmov, SSE or MMX). The script builds in an Alpine i386 container and writes the release archive.
+On the 32-bit PC itself, or any 32-bit x86 Linux. Today's distributions need an i686 (Debian i386) or an SSE2 CPU (Alpine x86), and their gcc targets that by default. For a binary that also runs on a Pentium or an AMD K6, build everything, musl included, for the i586 through a small compiler wrapper:
 
 ```console
-$ sudo apt install docker.io git        # or any Docker
-$ scripts/release-linux-i386.sh
+$ sudo apk add build-base git curl              # Alpine x86
+$ sudo apt install build-essential git curl     # Debian i386
+$ printf '#!/bin/sh\nexec gcc -march=i586 -mtune=generic -mfpmath=387 -mno-sse -mno-mmx "$@"\n' > i586-gcc
+$ chmod +x i586-gcc
+$ make musl LIBC=vendor LIBC_CC=$PWD/i586-gcc
 ...
 ==> Built shclaw (388.0K)
+$ make check LIBC=vendor LIBC_CC=$PWD/i586-gcc
+...
 All checks passed.
-$ ls dist/
-shclaw-0.1.3-linux-i386.tar.gz
 ```
 
-Tested in Alpine 3.24 (i386 userland), and on an emulated Pentium: the binary holds no cmov, SSE or MMX instruction and compiles a plugin there.
+Without the wrapper, `make musl LIBC=vendor` builds for the distribution's CPU baseline. Under a 64-bit kernel with a 32-bit userland, run make through `setarch i686`: TinyCC's configure reads the CPU from `uname -m`.
+
+Tested in an Alpine 3.24 x86 (32-bit) userland with the wrapper, and on an emulated Pentium: the binary holds no cmov, SSE or MMX instruction and compiles a plugin there.
 
 ### Linux armv7l (Raspberry Pi, 32-bit OS)
 
@@ -115,10 +120,11 @@ Tested on a Raspberry Pi 3 B+, Raspberry Pi OS 32-bit (Debian 13, gcc 14).
 
 ### Linux aarch64
 
-Raspberry Pi with a 64-bit OS, ARM servers.
+On the Raspberry Pi with a 64-bit OS, or an ARM server:
 
 ```console
-$ sudo apk add build-base git curl      # or: sudo apt install build-essential git curl
+$ sudo apk add build-base git curl              # Alpine
+$ sudo apt install build-essential git curl     # Raspberry Pi OS 64-bit, Debian, Ubuntu
 $ make musl LIBC=vendor
 ...
 ==> Built shclaw (428.0K)
@@ -131,38 +137,37 @@ Tested on a Raspberry Pi 3 B+ (64-bit kernel), Alpine 3.24 aarch64.
 
 ### Linux armv6 (Pi Zero, Pi 1)
 
-On a Pi Zero or Pi 1, `make musl LIBC=vendor` works as is, slowly. On a newer Pi, build in an ARMv6 userland, e.g. Alpine armhf (its gcc targets the ARMv6), and tell TinyCC to generate ARMv6 code rather than the board's:
+On the Pi Zero or Pi 1 itself, with Raspberry Pi OS (32-bit) or Alpine armhf: both compilers target the ARMv6. The first build takes a while on this single core (musl, BearSSL, TinyCC, link-time optimization).
 
 ```console
-$ apk add build-base git curl
-$ T="TCC_CONF=--cpu=armv6l --triplet=arm-linux-gnueabihf"
-$ linux32 make musl LIBC=vendor DIST_ARCH=armv6 "$T"
+$ sudo apt install build-essential git curl     # Raspberry Pi OS 32-bit
+$ sudo apk add build-base git curl              # Alpine armhf
+$ make musl LIBC=vendor
 ...
 ==> Built shclaw (448.0K)
-$ linux32 make check LIBC=vendor DIST_ARCH=armv6 "$T"
+$ make check LIBC=vendor
 ...
 All checks passed.
 ```
 
-Tested in an Alpine 3.24 armhf chroot on a Raspberry Pi 3 B+, and on an emulated ARM1176 (the Pi Zero/1 CPU), where it compiles a plugin.
+Tested in an Alpine 3.24 armhf userland on a Raspberry Pi 3 B+, with TinyCC told to generate ARMv6 code (`TCC_CONF="--cpu=armv6l --triplet=arm-linux-gnueabihf"`, needed on a newer CPU only), and on an emulated ARM1176, the Pi Zero/1 CPU, where it compiles a plugin.
 
 ### Linux riscv64
 
-On a RISC-V board, or in an Alpine container under qemu on a PC (with `qemu-riscv64` registered in binfmt_misc):
+On the RISC-V board (Debian, Ubuntu, Alpine...):
 
 ```console
-$ docker run --rm -it --platform linux/riscv64 alpine:3.24
-# apk add build-base git curl
-# git clone https://github.com/govlog/shclaw && cd shclaw
-# make musl LIBC=vendor
+$ sudo apt install build-essential git curl     # Debian, Ubuntu
+$ sudo apk add build-base git curl              # Alpine
+$ make musl LIBC=vendor
 ...
 ==> Built shclaw (384.0K)
-# make check LIBC=vendor
+$ make check LIBC=vendor
 ...
 All checks passed.
 ```
 
-Tested in Alpine 3.24 under qemu-user.
+Tested in an Alpine 3.24 riscv64 userland under qemu, not on a board yet.
 
 ---
 
@@ -281,7 +286,7 @@ $ make musl LIBC=vendor SECURE=1        # gmake native SECURE=1 on the BSDs
 ==> Built shclaw (424K)
 ```
 
-The hardened binaries are 5 to 40% bigger. They passed the same checks and live runs on every system above. For the i386 script: `SECURE=1 scripts/release-linux-i386.sh`.
+The hardened binaries are 5 to 40% bigger. They passed the same checks and live runs on every system above.
 
 ## Install and release archives
 

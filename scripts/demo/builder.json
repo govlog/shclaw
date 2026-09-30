@@ -1,2 +1,0 @@
-[{"say": "@builder make a plugin called weather that gives the current weather of a city, using wttr.in", "quiet": 25, "max": 300},
- {"say": "what's the weather in Paris and in Tokyo right now?", "quiet": 12}]

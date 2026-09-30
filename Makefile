@@ -19,11 +19,11 @@ PREFIX   = /opt/shclaw
 # -------------------------------------------------------------------
 ARCH    := $(shell uname -m)
 UNAME_S := $(shell uname -s)
-X86     := $(filter x86_64 i686 i386,$(ARCH))
+X86     := $(filter x86_64 i%86,$(ARCH))
 
 # TinyCC keeps the i386 stack 4-byte aligned, gcc code expects 16 bytes
 # (SSE): the functions that plugins call must realign it on entry
-REALIGN := $(if $(filter i686 i386,$(ARCH)),-mstackrealign,)
+REALIGN := $(if $(filter i%86,$(ARCH)),-mstackrealign,)
 # NetBSD (PaX MPROTECT) never lets written pages become executable: TinyCC
 # maps its code from a temporary file twice instead, RX and RW
 TCC_DEFS := $(if $(filter NetBSD,$(UNAME_S)),-DCONFIG_SELINUX,)
@@ -54,7 +54,7 @@ ifeq ($(SECURE),1)
   STATIC    := -static-pie
   PIE       := -fPIE
   # Packed relative relocations (DT_RELR): 11K less on x86_64, musl 1.2.4+
-  RELR      := $(if $(filter x86_64 aarch64 i686 i386,$(ARCH)),-Wl$(comma)-z$(comma)pack-relative-relocs,)
+  RELR      := $(if $(filter x86_64 aarch64 i%86,$(ARCH)),-Wl$(comma)-z$(comma)pack-relative-relocs,)
 else
   # Also turns off what distribution compilers enable by default, and
   # OpenBSD's return address protector
